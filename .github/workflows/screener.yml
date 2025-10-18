@@ -35,7 +35,8 @@ jobs:
           ALPHAVANTAGE_KEY: ${{ secrets.ALPHAVANTAGE_KEY }}
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
           THROTTLE_SECONDS: "13"
-          MAX_SYMBOLS: "60"        # スクリーニング対象は最大60件
+          MAX_SYMBOLS: "60"
+          ALPHAVANTAGE_MAX_DAILY_CALLS: "20"   # ★ 追加：無料枠を踏まえた日次上限
         run: |
           python scripts/screener.py
 

@@ -1,13 +1,17 @@
-import os, time, json
+import os, time, json, shutil
 import requests, pandas as pd
 from dateutil import tz
-from datetime import datetime
+from datetime import datetime, timedelta
 
 API = "https://www.alphavantage.co/query"
 KEY = os.environ["ALPHAVANTAGE_KEY"]
 PPX_KEY = os.environ.get("PERPLEXITY_API_KEY")
 THROTTLE = int(os.environ.get("THROTTLE_SECONDS", "13"))
 MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "60"))
+MAX_DAILY_CALLS = int(
+    os.environ.get("ALPHAVANTAGE_MAX_DAILY_CALLS", "20")
+)  # ★追加：日次上限
+CACHE_DAYS = int(os.environ.get("ALPHAVANTAGE_CACHE_DAYS", "7"))
 
 JST = tz.gettz("Asia/Tokyo")
 TODAY = datetime.now(JST).strftime("%Y%m%d")
@@ -17,18 +21,78 @@ REPORT_CSV = f"reports/screen_{TODAY}.csv"
 REPORT_MD = f"reports/screen_{TODAY}.md"
 os.makedirs("reports", exist_ok=True)
 
+INCACHE_DIR = "cache/av_income"
+os.makedirs(INCACHE_DIR, exist_ok=True)
+
+
+class RateLimitError(Exception):
+    pass
+
 
 def _get(params):
     r = requests.get(API, params=params, timeout=60)
     r.raise_for_status()
-    return r.json()
+    j = r.json()
+    # AlphaVantageのレート制限/日次上限メッセージに反応
+    if isinstance(j, dict) and "Information" in j:
+        raise RateLimitError(j.get("Information"))
+    return j
 
 
-def fetch_income_statement(symbol):
+def _cache_path(symbol: str) -> str:
+    safe = symbol.replace("/", "_")
+    return os.path.join(INCACHE_DIR, f"{safe}.json")
+
+
+def _load_income_cache(symbol: str):
+    p = _cache_path(symbol)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        ts = data.get("_cached_at")
+        if not ts:
+            return None
+        cached_dt = datetime.fromisoformat(ts)
+        if datetime.utcnow() - cached_dt > timedelta(days=CACHE_DAYS):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _save_income_cache(symbol: str, data: dict):
+    data = dict(data)
+    data["_cached_at"] = datetime.utcnow().isoformat()
+    tmp = _cache_path(symbol) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    shutil.move(tmp, _cache_path(symbol))
+
+
+def fetch_income_statement(symbol, call_budget):
+    """
+    call_budget: 残りAPIコール可能数（0ならAPIを叩かずキャッシュのみ）
+    戻り値: (annualReports, quarterlyReports, used_api_call: bool)
+    """
+    # 1) キャッシュ優先
+    cached = _load_income_cache(symbol)
+    if cached and "annualReports" in cached and "quarterlyReports" in cached:
+        return cached["annualReports"], cached["quarterlyReports"], False
+
+    # 2) 予算がなければ失敗扱い（上位でスキップ）
+    if call_budget <= 0:
+        raise RateLimitError("Daily call budget exhausted (pre-check).")
+
+    # 3) APIコール
     data = _get({"function": "INCOME_STATEMENT", "symbol": symbol, "apikey": KEY})
     if "annualReports" not in data or "quarterlyReports" not in data:
+        # データ欠損は通常エラーとして扱う
         raise RuntimeError(f"INCOME_STATEMENT missing for {symbol}: {data}")
-    return data["annualReports"], data["quarterlyReports"]
+    _save_income_cache(symbol, data)
+    time.sleep(THROTTLE)
+    return data["annualReports"], data["quarterlyReports"], True
 
 
 def to_int(v):
@@ -44,19 +108,19 @@ def annual_checks(annual):
         rows.append(
             {
                 "year": a.get("fiscalDateEnding"),
-                "pretax": to_int(a.get("incomeBeforeTax")),  # 経常の近似：pretax
+                "pretax": to_int(a.get("incomeBeforeTax")),  # 経常の近似: pretax
                 "revenue": to_int(a.get("totalRevenue")),
             }
         )
-    df = pd.DataFrame(rows).dropna().head(6)  # 最新→過去
+    df = pd.DataFrame(rows).dropna().head(6)
     if len(df) < 3:
         return {"enough_years": False}
     df["pretax_yoy"] = df["pretax"].pct_change(periods=-1)
     df["margin"] = df["pretax"] / df["revenue"]
-    window = df.head(5)  # 直近5年
+    window = df.head(5)
     yoy = window["pretax_yoy"].dropna()
     stable_5_10 = all(0.05 <= x <= 0.10 for x in yoy) if len(yoy) >= 3 else False
-    no_big_drop = all(x is None or x > -0.20 for x in yoy)
+    no_big_drop = all((x is None) or (x > -0.20) for x in yoy)
     last1 = yoy.iloc[0] if len(yoy) >= 1 else None
     if (
         len(window) >= 3
@@ -88,10 +152,9 @@ def quarterly_checks(quarterly):
                 "revenue": to_int(q.get("totalRevenue")),
             }
         )
-    df = pd.DataFrame(rows).dropna().head(8)  # 最新8Q
+    df = pd.DataFrame(rows).dropna().head(8)
     if len(df) < 5:
         return {"enough_quarters": False}
-    # YoYは4期前比較
     df["pretax_yoy"] = (df["pretax"] - df["pretax"].shift(-4)) / df["pretax"].shift(-4)
     df["revenue_yoy"] = (df["revenue"] - df["revenue"].shift(-4)) / df["revenue"].shift(
         -4
@@ -151,7 +214,6 @@ def score(ann, qrt):
             notes.append("直近2年CAGR+20%未満")
     else:
         notes.append("年次データ不足")
-
     if qrt.get("enough_quarters"):
         if qrt.get("lastQ_ok"):
             s += 1
@@ -171,7 +233,6 @@ def score(ann, qrt):
             notes.append("売上高経常(pretax)利益率のYoY改善なし")
     else:
         notes.append("四半期データ不足")
-
     return s, "; ".join(notes)
 
 
@@ -200,10 +261,9 @@ def perc(x):
 
 
 def main():
-    # シンボルファイルの存在チェック
+    # symbols 読み込みと防御
     if not os.path.exists(SYMBOLS_PATH):
         print(f"[screen] {SYMBOLS_PATH} がありません。終了。")
-        # 空レポートを出力して正常終了扱い
         pd.DataFrame([]).to_csv(REPORT_CSV, index=False, encoding="utf-8")
         with open(REPORT_MD, "w", encoding="utf-8") as f:
             f.write(
@@ -212,13 +272,9 @@ def main():
         print("Saved (empty):", REPORT_CSV, REPORT_MD)
         return
 
-    # シンボルの読み込み（空行とコメント行を除外）
     with open(SYMBOLS_PATH, "r", encoding="utf-8") as f:
         symbols = [x.strip() for x in f if x.strip() and not x.strip().startswith("#")]
-
     symbols = symbols[:MAX_SYMBOLS]
-
-    # シンボルが0件でもエラーにしない
     if not symbols:
         print("[screen] シンボルが0件のため、処理せず終了（正常）。")
         pd.DataFrame([]).to_csv(REPORT_CSV, index=False, encoding="utf-8")
@@ -228,10 +284,20 @@ def main():
         return
 
     rows = []
+    errors = []  # 表に出さない。注記にまとめる
+    skipped = []  # 日次上限等で未処理になった銘柄
+    used_api_calls = 0
+    used_cache = 0
+    hit_rate_limit = False
+
     for i, sym in enumerate(symbols, 1):
         print(f"[{i}/{len(symbols)}] {sym}")
         try:
-            annual, quarterly = fetch_income_statement(sym)
+            budget_left = MAX_DAILY_CALLS - used_api_calls
+            annual, quarterly, used_api = fetch_income_statement(sym, budget_left)
+            used_api_calls += int(used_api)
+            used_cache += int(not used_api)
+
             ann = annual_checks(annual)
             qrt = quarterly_checks(quarterly)
             sc, notes = score(ann, qrt)
@@ -272,57 +338,82 @@ def main():
                     "digest": perplexity_digest(sym) if sc >= 3 else "",
                 }
             )
+
+        except RateLimitError as e:
+            hit_rate_limit = True
+            errors.append(f"{sym}: {str(e)}")
+            # 残り銘柄はスキップ
+            skipped.extend(symbols[i:])  # 現在の次から最後まで
+            break
+
         except Exception as e:
-            rows.append(
-                {
-                    "symbol": sym,
-                    "score_0to7": None,
-                    "notes": f"データ取得エラー: {e}",
-                    "digest": "",
-                }
-            )
-        time.sleep(THROTTLE)
+            # データ欠損など通常エラーは注記にまとめるだけ。行は追加しない。
+            errors.append(f"{sym}: {e}")
 
+    # もし残り予算ゼロで未処理が出た場合、それもスキップとして記録
+    if used_api_calls >= MAX_DAILY_CALLS:
+        # キャッシュ命中なら処理続行しているはずだが、未処理が残る可能性がある
+        # ループのbreakはしないが、明示的に記録
+        pass
+
+    # DataFrame化（表は成功銘柄のみ）
     df = pd.DataFrame(rows)
-    if df.empty:
-        print("[screen] rowsが空。空レポートを出力します。")
+    if not df.empty:
+        df = df.sort_values(["score_0to7", "symbol"], ascending=[False, True])
         df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
-        with open(REPORT_MD, "w", encoding="utf-8") as f:
-            f.write(
-                f"# 日次スクリーナー（{TODAY} JST）\n\n対象データがありませんでした。"
-            )
-        print("Saved (empty):", REPORT_CSV, REPORT_MD)
-        return
+    else:
+        # 空でもCSVを出す
+        df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
 
-    df = df.sort_values(["score_0to7", "symbol"], ascending=[False, True])
-    df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
-
-    # Markdown
-    lines = [
+    # Markdown: ヘッダ＋集計＋表＋注記
+    summary_lines = [
         f"# 日次スクリーナー（{TODAY} JST）\n",
         "※ 経常利益の近似として **incomeBeforeTax (preTax)** を使用。\n",
-        "|Symbol|Score|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
-        "|---|---:|---:|---:|---:|---:|:---:|:---:|:---:|:---:|---|",
+        f"- 処理銘柄（表に掲載）: **{len(df)}** 件\n",
+        f"- Alpha Vantage API 使用回数: **{used_api_calls}** / 上限 {MAX_DAILY_CALLS}\n",
+        f"- キャッシュ命中: **{used_cache}** 件\n",
     ]
-    for r in df.to_dict("records"):
-        row = (
-            f"|{r['symbol']}|{r.get('score_0to7','')}|"
-            f"{perc(r.get('annual_last1_yoy'))}|"
-            f"{perc(r.get('annual_last2_cagr'))}|"
-            f"{perc(r.get('q_last_pretax_yoy'))}|"
-            f"{perc(r.get('q_last_revenue_yoy'))}|"
-            f"{'✅' if r.get('q_last_ok_20_10') else '—'}|"
-            f"{'✅' if r.get('q_seq_ok') else '—'}|"
-            f"{'✅' if r.get('q_accelerating') else '—'}|"
-            f"{'✅' if r.get('q_improving_margin') else '—'}|"
-            f"{r.get('notes','')}|"
+    if hit_rate_limit:
+        summary_lines.append(f"- ⚠️ レート制限に到達。以降の銘柄はスキップしました。\n")
+    if skipped:
+        summary_lines.append(
+            f"- スキップした銘柄（上限/制限等）: {', '.join(skipped)}\n"
         )
-        lines.append(row)
-        if r.get("digest"):
-            lines.append(f"\n**{r['symbol']} 要約**\n\n{r['digest']}\n")
+
+    table_lines = []
+    if not df.empty:
+        table_lines += [
+            "|Symbol|Score|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
+            "|---|---:|---:|---:|---:|---:|:---:|:---:|:---:|:---:|---|",
+        ]
+        for r in df.to_dict("records"):
+            table_lines.append(
+                f"|{r['symbol']}|{r.get('score_0to7','')}|"
+                f"{perc(r.get('annual_last1_yoy'))}|"
+                f"{perc(r.get('annual_last2_cagr'))}|"
+                f"{perc(r.get('q_last_pretax_yoy'))}|"
+                f"{perc(r.get('q_last_revenue_yoy'))}|"
+                f"{'✅' if r.get('q_last_ok_20_10') else '—'}|"
+                f"{'✅' if r.get('q_seq_ok') else '—'}|"
+                f"{'✅' if r.get('q_accelerating') else '—'}|"
+                f"{'✅' if r.get('q_improving_margin') else '—'}|"
+                f"{r.get('notes','')}|"
+            )
+            if r.get("digest"):
+                table_lines.append(f"\n**{r['symbol']} 要約**\n\n{r['digest']}\n")
+    else:
+        table_lines.append("> 表示可能なデータがありませんでした。")
+
+    notes_lines = []
+    if errors:
+        notes_lines += ["\n### 注記（処理できなかった銘柄など）\n"]
+        for e in errors[:50]:
+            notes_lines.append(f"- {e}")
+        if len(errors) > 50:
+            notes_lines.append(f"- …ほか {len(errors)-50} 件")
 
     with open(REPORT_MD, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        f.write("\n".join(summary_lines + ["\n"] + table_lines + ["\n"] + notes_lines))
 
     print("Saved:", REPORT_CSV, REPORT_MD)
 
