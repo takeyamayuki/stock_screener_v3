@@ -200,9 +200,32 @@ def perc(x):
 
 
 def main():
+    # シンボルファイルの存在チェック
+    if not os.path.exists(SYMBOLS_PATH):
+        print(f"[screen] {SYMBOLS_PATH} がありません。終了。")
+        # 空レポートを出力して正常終了扱い
+        pd.DataFrame([]).to_csv(REPORT_CSV, index=False, encoding="utf-8")
+        with open(REPORT_MD, "w", encoding="utf-8") as f:
+            f.write(
+                f"# 日次スクリーナー（{TODAY} JST）\n\nシンボルファイルが見つかりませんでした。"
+            )
+        print("Saved (empty):", REPORT_CSV, REPORT_MD)
+        return
+
+    # シンボルの読み込み（空行とコメント行を除外）
     with open(SYMBOLS_PATH, "r", encoding="utf-8") as f:
-        symbols = [x.strip() for x in f if x.strip()]
+        symbols = [x.strip() for x in f if x.strip() and not x.strip().startswith("#")]
+
     symbols = symbols[:MAX_SYMBOLS]
+
+    # シンボルが0件でもエラーにしない
+    if not symbols:
+        print("[screen] シンボルが0件のため、処理せず終了（正常）。")
+        pd.DataFrame([]).to_csv(REPORT_CSV, index=False, encoding="utf-8")
+        with open(REPORT_MD, "w", encoding="utf-8") as f:
+            f.write(f"# 日次スクリーナー（{TODAY} JST）\n\nシンボルが0件でした。")
+        print("Saved (empty):", REPORT_CSV, REPORT_MD)
+        return
 
     rows = []
     for i, sym in enumerate(symbols, 1):
@@ -260,9 +283,18 @@ def main():
             )
         time.sleep(THROTTLE)
 
-    df = pd.DataFrame(rows).sort_values(
-        ["score_0to7", "symbol"], ascending=[False, True]
-    )
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print("[screen] rowsが空。空レポートを出力します。")
+        df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
+        with open(REPORT_MD, "w", encoding="utf-8") as f:
+            f.write(
+                f"# 日次スクリーナー（{TODAY} JST）\n\n対象データがありませんでした。"
+            )
+        print("Saved (empty):", REPORT_CSV, REPORT_MD)
+        return
+
+    df = df.sort_values(["score_0to7", "symbol"], ascending=[False, True])
     df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
 
     # Markdown
