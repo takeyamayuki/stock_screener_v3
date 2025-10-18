@@ -23,9 +23,11 @@ jobs:
       - name: Fetch today's 52w-high JP tickers (via Perplexity)
         env:
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
-          ALPHAVANTAGE_KEY: ${{ secrets.ALPHAVANTAGE_KEY }}   # ETF除外確認に使用
-          THROTTLE_SECONDS: "13"   # レート制限ケア（無料枠: ~5req/min）
-          MAX_SYMBOLS: "80"        # 取得上限（重複/除外で目減りするので余裕）
+          ALPHAVANTAGE_KEY: ${{ secrets.ALPHAVANTAGE_KEY }}
+          THROTTLE_SECONDS: "13"
+          MAX_SYMBOLS: "80"
+          USE_AV_OVERVIEW_FILTER: "false"      # ← 追加：ETF除外でAVを使わない
+          AV_OVERVIEW_DAILY_BUDGET: "5"        # ← 追加：true時でも最大5件だけ
         run: |
           python scripts/fetch_symbols_ppx.py
           echo "Fetched symbols:"; cat config/symbols.txt || true
@@ -36,9 +38,8 @@ jobs:
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
           THROTTLE_SECONDS: "13"
           MAX_SYMBOLS: "60"
-          ALPHAVANTAGE_MAX_DAILY_CALLS: "20"   # ★ 追加：無料枠を踏まえた日次上限
-        run: |
-          python scripts/screener.py
+          ALPHAVANTAGE_MAX_DAILY_CALLS: "20"   # ← スクリーナーに20件残す
+        run: python scripts/screener.py
 
       - name: Commit results
         run: |

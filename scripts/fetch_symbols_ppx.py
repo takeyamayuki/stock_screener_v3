@@ -7,6 +7,10 @@ PPX_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 AV_KEY = os.environ.get("ALPHAVANTAGE_KEY", "")
 THROTTLE = int(os.environ.get("THROTTLE_SECONDS", "13"))
 MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "200"))
+USE_AV_OVERVIEW_FILTER = (
+    os.environ.get("USE_AV_OVERVIEW_FILTER", "false").lower() == "true"
+)
+AV_OVERVIEW_DAILY_BUDGET = int(os.environ.get("AV_OVERVIEW_DAILY_BUDGET", "5"))
 
 # --- パス ---
 os.makedirs("config", exist_ok=True)
@@ -131,23 +135,39 @@ def save_cache(d):
 
 CACHE = load_cache()
 
+# av_overview_asset_type をラップして日次回数を制御
+_av_calls = 0
+
 
 def av_overview_asset_type(symbol_t: str) -> str:
-    """Alpha Vantage OVERVIEWでAssetTypeを取得。7日キャッシュ。"""
-    if not AV_KEY:
-        return ""
+    global _av_calls
+    if not AV_KEY or not USE_AV_OVERVIEW_FILTER:
+        return ""  # ← フィルタ無効なら何もせず戻る
+
+    # まずキャッシュ
     now_ts = dt.datetime.utcnow().timestamp()
     if symbol_t in CACHE and now_ts - CACHE[symbol_t].get("ts", 0) < 7 * 24 * 3600:
         return (CACHE[symbol_t].get("asset") or "").upper()
+
+    # 日次の呼び出し上限
+    if _av_calls >= AV_OVERVIEW_DAILY_BUDGET:
+        return ""  # ← これ以上AVは叩かない（残りはそのまま通す）
+
     try:
         url = "https://www.alphavantage.co/query"
         params = {"function": "OVERVIEW", "symbol": symbol_t, "apikey": AV_KEY}
         rr = requests.get(url, params=params, timeout=60)
         rr.raise_for_status()
         j = rr.json()
+
+        # レート制限に当たったら以降使わない
+        if isinstance(j, dict) and "Information" in j:
+            return ""
+
         asset = (j.get("AssetType") or "").upper()
         CACHE[symbol_t] = {"asset": asset, "ts": now_ts}
         save_cache(CACHE)
+        _av_calls += 1
         return asset
     except Exception:
         return ""
@@ -172,9 +192,10 @@ def main():
 
     # 3) .T付与 + ETF/ETN/REIT等の除外（可能な範囲）
     symbols = []
+    # シンボル作成ループはそのまま。asset が ETF/ETN/REIT のときだけ除外。
     for c in codes:
         sym_t = f"{c}.T"
-        asset = av_overview_asset_type(sym_t) if AV_KEY else ""
+        asset = av_overview_asset_type(sym_t)  # ← 上の制御が効く
         if asset in {"ETF", "ETN", "REIT", "CLOSEDEND FUND"}:
             continue
         symbols.append(sym_t)
