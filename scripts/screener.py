@@ -107,49 +107,99 @@ def _save_overview_cache(symbol: str, data: dict):
     shutil.move(tmp, _ov_cache_path(symbol))
 
 
+def _symbol_variants(symbol: str):
+    """Yield possible Alpha Vantage symbol variants to improve hit rate."""
+    seen = set()
+
+    def push(value: str):
+        v = value.strip()
+        if v and v not in seen:
+            seen.add(v)
+            return True
+        return False
+
+    if push(symbol):
+        yield symbol
+
+    if "." in symbol:
+        base, suffix = symbol.split(".", 1)
+        if push(base):
+            yield base
+
+        suffix = suffix.upper()
+        if suffix == "T":
+            for alt_suffix in ("TYO", "TSE", "JP"):  # try common Tokyo variants
+                candidate = f"{base}.{alt_suffix}"
+                if push(candidate):
+                    yield candidate
+
+
 def fetch_income_statement(symbol, call_budget):
     """
     call_budget: 残りAPIコール可能数（0ならAPIを叩かずキャッシュのみ）
-    戻り値: (annualReports, quarterlyReports, used_api_call: bool)
+    戻り値: (annualReports|None, quarterlyReports|None, api_calls_used: int, error_message|None)
     """
-    # 1) キャッシュ優先
     cached = _load_income_cache(symbol)
     if cached and "annualReports" in cached and "quarterlyReports" in cached:
-        return cached["annualReports"], cached["quarterlyReports"], False
+        return cached["annualReports"], cached["quarterlyReports"], 0, None
 
-    # 2) 予算がなければ失敗扱い（上位でスキップ）
     if call_budget <= 0:
         raise RateLimitError("Daily call budget exhausted (pre-check).")
 
-    # 3) APIコール
-    data = _get({"function": "INCOME_STATEMENT", "symbol": symbol, "apikey": KEY})
-    if "annualReports" not in data or "quarterlyReports" not in data:
-        # データ欠損は通常エラーとして扱う
-        raise RuntimeError(f"INCOME_STATEMENT missing for {symbol}: {data}")
-    _save_income_cache(symbol, data)
-    time.sleep(THROTTLE)
-    return data["annualReports"], data["quarterlyReports"], True
+    calls_made = 0
+    last_error = None
+
+    for candidate in _symbol_variants(symbol):
+        if call_budget - calls_made <= 0:
+            raise RateLimitError("Daily call budget exhausted (pre-check).")
+
+        data = _get({"function": "INCOME_STATEMENT", "symbol": candidate, "apikey": KEY})
+        calls_made += 1
+
+        annual = data.get("annualReports")
+        quarterly = data.get("quarterlyReports")
+        if isinstance(annual, list) and annual and isinstance(quarterly, list) and quarterly:
+            _save_income_cache(symbol, data)
+            time.sleep(THROTTLE)
+            return annual, quarterly, calls_made, None
+
+        last_error = f"INCOME_STATEMENT missing for {symbol} ({candidate}): {data}"
+        time.sleep(THROTTLE)
+
+    return None, None, calls_made, last_error or f"INCOME_STATEMENT missing for {symbol}: <no data>"
 
 
 def fetch_overview(symbol, call_budget):
     """
     Alpha Vantage OVERVIEW フォールバック。
-    戻り値: (overview_dict, used_api_call: bool)
+    戻り値: (overview_dict|None, api_calls_used: int, error_message|None)
     """
     cached = _load_overview_cache(symbol)
-    if cached and isinstance(cached, dict) and cached:
-        return cached, False
+    if isinstance(cached, dict):
+        return cached, 0, None
 
     if call_budget <= 0:
         raise RateLimitError("Daily call budget exhausted (pre-check).")
 
-    data = _get({"function": "OVERVIEW", "symbol": symbol, "apikey": KEY})
-    # OVERVIEWはキーが少なくても空dictで返ることがあるため、空dictでも行として処理可能にする
-    if not isinstance(data, dict):
-        raise RuntimeError(f"OVERVIEW missing for {symbol}: {data}")
-    _save_overview_cache(symbol, data)
-    time.sleep(THROTTLE)
-    return data, True
+    calls_made = 0
+    last_error = None
+
+    for candidate in _symbol_variants(symbol):
+        if call_budget - calls_made <= 0:
+            raise RateLimitError("Daily call budget exhausted (pre-check).")
+
+        data = _get({"function": "OVERVIEW", "symbol": candidate, "apikey": KEY})
+        calls_made += 1
+
+        if isinstance(data, dict):
+            _save_overview_cache(symbol, data)
+            time.sleep(THROTTLE)
+            return data, calls_made, None
+
+        last_error = f"OVERVIEW missing for {symbol} ({candidate}): {data}"
+        time.sleep(THROTTLE)
+
+    return None, calls_made, last_error or f"OVERVIEW missing for {symbol}: <no data>"
 
 
 def to_int(v):
@@ -382,17 +432,26 @@ def main():
 
     for i, sym in enumerate(symbols, 1):
         print(f"[{i}/{len(symbols)}] {sym}")
+
         try:
             budget_left = MAX_DAILY_CALLS - used_api_calls
-            # 事前にキャッシュ有無を確認し、APIコールが発生した場合の失敗も計上できるようにする
-            income_cached = _load_income_cache(sym)
-            expect_api_call = income_cached is None and budget_left > 0
+            annual, quarterly, api_calls_used, fetch_err = fetch_income_statement(
+                sym, budget_left
+            )
+        except RateLimitError as e:
+            hit_rate_limit = True
+            errors.append(f"{sym}: {str(e)}")
+            skipped.extend(symbols[i:])
+            break
+        except Exception as e:
+            errors.append(f"{sym}: fetch_income_statement error: {e}")
+            continue
 
-            annual, quarterly, used_api = fetch_income_statement(sym, budget_left)
-            # 成否に関わらず、呼び出しが発生した場合は使用回数に反映
-            used_api_calls += int(used_api)
-            used_cache += int(not used_api)
+        used_api_calls += api_calls_used
+        if api_calls_used == 0 and fetch_err is None:
+            used_cache += 1
 
+        if fetch_err is None:
             ann = annual_checks(annual)
             qrt = quarterly_checks(quarterly)
             sc, notes = score(ann, qrt)
@@ -433,69 +492,55 @@ def main():
                     "digest": perplexity_digest(sym) if sc >= 3 else "",
                 }
             )
+            continue
 
+        fallback_reason = fetch_err
+
+        try:
+            budget_left = MAX_DAILY_CALLS - used_api_calls
+            overview, overview_calls_used, overview_err = fetch_overview(
+                sym, budget_left
+            )
         except RateLimitError as e:
             hit_rate_limit = True
             errors.append(f"{sym}: {str(e)}")
-            # 残り銘柄はスキップ
-            skipped.extend(symbols[i:])  # 現在の次から最後まで
+            skipped.extend(symbols[i:])
             break
-
         except Exception as e:
-            # INCOME_STATEMENT のAPI呼び出しが発生していた場合は失敗でも1回分加算
-            try:
-                used_api_calls += int(expect_api_call)
-            except Exception:
-                pass
-            # INCOME_STATEMENTが欠損など → OVERVIEWでフォールバックを試す
-            try:
-                budget_left = MAX_DAILY_CALLS - used_api_calls
-                # OVERVIEWのキャッシュ状況を確認し、失敗時でも適切にカウントする
-                overview_cached = _load_overview_cache(sym)
-                expect_api_call_ov = overview_cached is None and budget_left > 0
+            errors.append(f"{sym}: {fallback_reason}; fallback error: {e}")
+            continue
 
-                overview, used_api_ov = fetch_overview(sym, budget_left)
-                used_api_calls += int(used_api_ov)
-                used_cache += int(not used_api_ov)
+        used_api_calls += overview_calls_used
+        if overview_calls_used == 0 and overview_err is None:
+            used_cache += 1
 
-                ann = {"enough_years": False}  # 年次は不明
-                qrt = overview_quarterly_checks(overview)
-                sc, notes = score(ann, qrt)
-                notes = ("(OVERVIEW fallback) " + notes).strip()
+        if overview_err is not None:
+            errors.append(f"{sym}: {fallback_reason}; fallback: {overview_err}")
+            continue
 
-                # 主要表示値（年次はNone、四半期はOVERVIEWのYoY）
-                lastQ_pre_yoy = to_float(overview.get("QuarterlyEarningsGrowthYOY"))
-                lastQ_rev_yoy = to_float(overview.get("QuarterlyRevenueGrowthYOY"))
+        qrt = overview_quarterly_checks(overview)
+        sc, notes = score({"enough_years": False}, qrt)
+        notes = ("(OVERVIEW fallback) " + notes).strip()
 
-                rows.append(
-                    {
-                        "symbol": sym,
-                        "score_0to7": sc,
-                        "annual_last1_yoy": None,
-                        "annual_last2_cagr": None,
-                        "q_last_pretax_yoy": lastQ_pre_yoy,
-                        "q_last_revenue_yoy": lastQ_rev_yoy,
-                        "q_last_ok_20_10": qrt.get("lastQ_ok"),
-                        "q_seq_ok": qrt.get("sequential_ok"),
-                        "q_accelerating": qrt.get("accelerating"),
-                        "q_improving_margin": qrt.get("improving_margin"),
-                        "notes": notes,
-                        "digest": perplexity_digest(sym) if sc >= 3 else "",
-                    }
-                )
-            except RateLimitError as e2:
-                hit_rate_limit = True
-                errors.append(f"{sym}: {str(e2)}")
-                skipped.extend(symbols[i:])
-                break
-            except Exception as e2:
-                # OVERVIEW のAPI呼び出しが発生していた場合は失敗でも1回分加算
-                try:
-                    used_api_calls += int(expect_api_call_ov)
-                except Exception:
-                    pass
-                # どちらも取得できない場合のみエラー記録
-                errors.append(f"{sym}: {e}; fallback: {e2}")
+        lastQ_pre_yoy = to_float(overview.get("QuarterlyEarningsGrowthYOY"))
+        lastQ_rev_yoy = to_float(overview.get("QuarterlyRevenueGrowthYOY"))
+
+        rows.append(
+            {
+                "symbol": sym,
+                "score_0to7": sc,
+                "annual_last1_yoy": None,
+                "annual_last2_cagr": None,
+                "q_last_pretax_yoy": lastQ_pre_yoy,
+                "q_last_revenue_yoy": lastQ_rev_yoy,
+                "q_last_ok_20_10": qrt.get("lastQ_ok"),
+                "q_seq_ok": qrt.get("sequential_ok"),
+                "q_accelerating": qrt.get("accelerating"),
+                "q_improving_margin": qrt.get("improving_margin"),
+                "notes": notes,
+                "digest": perplexity_digest(sym) if sc >= 3 else "",
+            }
+        )
 
     # もし残り予算ゼロで未処理が出た場合、それもスキップとして記録
     if used_api_calls >= MAX_DAILY_CALLS:

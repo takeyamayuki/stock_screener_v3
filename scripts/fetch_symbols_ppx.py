@@ -139,6 +139,33 @@ CACHE = load_cache()
 _av_calls = 0
 
 
+def _symbol_variants(symbol: str):
+    """Alpha Vantage向けのシンボル候補を列挙（東京市場: .T/.TYO/.TSE/.JP, 無し）。"""
+    seen = set()
+
+    def push(value: str):
+        v = value.strip()
+        if v and v not in seen:
+            seen.add(v)
+            return True
+        return False
+
+    if push(symbol):
+        yield symbol
+
+    if "." in symbol:
+        base, suffix = symbol.split(".", 1)
+        if push(base):
+            yield base
+
+        suffix = suffix.upper()
+        if suffix == "T":
+            for alt in ("TYO", "TSE", "JP"):
+                candidate = f"{base}.{alt}"
+                if push(candidate):
+                    yield candidate
+
+
 def av_overview_asset_type(symbol_t: str) -> str:
     global _av_calls
     if not AV_KEY or not USE_AV_OVERVIEW_FILTER:
@@ -153,26 +180,43 @@ def av_overview_asset_type(symbol_t: str) -> str:
     if _av_calls >= AV_OVERVIEW_DAILY_BUDGET:
         return ""  # ← これ以上AVは叩かない（残りはそのまま通す）
 
-    try:
-        url = "https://www.alphavantage.co/query"
-        params = {"function": "OVERVIEW", "symbol": symbol_t, "apikey": AV_KEY}
-        rr = requests.get(url, params=params, timeout=60)
-        rr.raise_for_status()
-        j = rr.json()
+    url = "https://www.alphavantage.co/query"
+    last_asset = ""
 
-        # レート制限に当たったら以降使わない
-        if isinstance(j, dict) and "Information" in j:
-            return ""
+    for candidate in _symbol_variants(symbol_t):
+        if _av_calls >= AV_OVERVIEW_DAILY_BUDGET:
+            break
 
-        asset = (j.get("AssetType") or "").upper()
-        CACHE[symbol_t] = {"asset": asset, "ts": now_ts}
-        save_cache(CACHE)
         _av_calls += 1
-        return asset
-    except Exception:
-        return ""
-    finally:
-        time.sleep(THROTTLE)
+        try:
+            params = {"function": "OVERVIEW", "symbol": candidate, "apikey": AV_KEY}
+            rr = requests.get(url, params=params, timeout=60)
+            rr.raise_for_status()
+            j = rr.json()
+
+            if isinstance(j, dict) and "Information" in j:
+                break  # レート制限通知
+
+            if isinstance(j, dict):
+                asset = (j.get("AssetType") or "").upper()
+                if asset:
+                    CACHE[symbol_t] = {
+                        "asset": asset,
+                        "ts": now_ts,
+                        "source": candidate,
+                    }
+                    save_cache(CACHE)
+                    return asset
+                last_asset = asset
+        except Exception:
+            pass
+        finally:
+            time.sleep(THROTTLE)
+
+    if symbol_t not in CACHE:
+        CACHE[symbol_t] = {"asset": last_asset, "ts": now_ts}
+        save_cache(CACHE)
+    return last_asset
 
 
 def main():
