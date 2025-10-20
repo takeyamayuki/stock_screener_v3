@@ -1,17 +1,18 @@
-import os, time, json, shutil
-import requests, pandas as pd
-from dateutil import tz
-from datetime import datetime, timedelta
+from __future__ import annotations
 
-API = "https://www.alphavantage.co/query"
-KEY = os.environ["ALPHAVANTAGE_KEY"]
+import os
+from datetime import datetime
+from typing import List, Tuple
+
+import pandas as pd
+import requests
+from dateutil import tz
+
+from providers import FinancialDataProvider
+
 PPX_KEY = os.environ.get("PERPLEXITY_API_KEY")
 THROTTLE = int(os.environ.get("THROTTLE_SECONDS", "13"))
 MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "60"))
-MAX_DAILY_CALLS = int(
-    os.environ.get("ALPHAVANTAGE_MAX_DAILY_CALLS", "20")
-)  # ★追加：日次上限
-CACHE_DAYS = int(os.environ.get("ALPHAVANTAGE_CACHE_DAYS", "7"))
 
 JST = tz.gettz("Asia/Tokyo")
 TODAY = datetime.now(JST).strftime("%Y%m%d")
@@ -21,362 +22,139 @@ REPORT_CSV = f"reports/screen_{TODAY}.csv"
 REPORT_MD = f"reports/screen_{TODAY}.md"
 os.makedirs("reports", exist_ok=True)
 
-INCACHE_DIR = "cache/av_income"
-os.makedirs(INCACHE_DIR, exist_ok=True)
 
-# OVERVIEW フォールバック用キャッシュ
-OVERCACHE_DIR = "cache/av_overview"
-os.makedirs(OVERCACHE_DIR, exist_ok=True)
-
-
-class RateLimitError(Exception):
-    pass
-
-
-def _get(params):
-    r = requests.get(API, params=params, timeout=60)
-    r.raise_for_status()
-    j = r.json()
-    # AlphaVantageのレート制限/日次上限メッセージに反応
-    if isinstance(j, dict) and "Information" in j:
-        raise RateLimitError(j.get("Information"))
-    return j
-
-
-def _cache_path(symbol: str) -> str:
-    safe = symbol.replace("/", "_")
-    return os.path.join(INCACHE_DIR, f"{safe}.json")
-
-
-def _load_income_cache(symbol: str):
-    p = _cache_path(symbol)
-    if not os.path.exists(p):
-        return None
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        ts = data.get("_cached_at")
-        if not ts:
-            return None
-        cached_dt = datetime.fromisoformat(ts)
-        if datetime.utcnow() - cached_dt > timedelta(days=CACHE_DAYS):
-            return None
-        return data
-    except Exception:
-        return None
-
-
-def _save_income_cache(symbol: str, data: dict):
-    data = dict(data)
-    data["_cached_at"] = datetime.utcnow().isoformat()
-    tmp = _cache_path(symbol) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-    shutil.move(tmp, _cache_path(symbol))
-
-
-def _ov_cache_path(symbol: str) -> str:
-    safe = symbol.replace("/", "_")
-    return os.path.join(OVERCACHE_DIR, f"{safe}.json")
-
-
-def _load_overview_cache(symbol: str):
-    p = _ov_cache_path(symbol)
-    if not os.path.exists(p):
-        return None
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        ts = data.get("_cached_at")
-        if not ts:
-            return None
-        cached_dt = datetime.fromisoformat(ts)
-        if datetime.utcnow() - cached_dt > timedelta(days=CACHE_DAYS):
-            return None
-        return data
-    except Exception:
-        return None
-
-
-def _save_overview_cache(symbol: str, data: dict):
-    data = dict(data)
-    data["_cached_at"] = datetime.utcnow().isoformat()
-    tmp = _ov_cache_path(symbol) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-    shutil.move(tmp, _ov_cache_path(symbol))
-
-
-def _symbol_variants(symbol: str):
-    """Yield possible Alpha Vantage symbol variants to improve hit rate."""
-    seen = set()
-
-    def push(value: str):
-        v = value.strip()
-        if v and v not in seen:
-            seen.add(v)
-            return True
-        return False
-
-    if push(symbol):
-        yield symbol
-
-    if "." in symbol:
-        base, suffix = symbol.split(".", 1)
-        if push(base):
-            yield base
-
-        suffix = suffix.upper()
-        if suffix == "T":
-            for alt_suffix in ("TYO", "TSE", "JP"):  # try common Tokyo variants
-                candidate = f"{base}.{alt_suffix}"
-                if push(candidate):
-                    yield candidate
-
-
-def fetch_income_statement(symbol, call_budget):
-    """
-    call_budget: 残りAPIコール可能数（0ならAPIを叩かずキャッシュのみ）
-    戻り値: (annualReports|None, quarterlyReports|None, api_calls_used: int, error_message|None)
-    """
-    cached = _load_income_cache(symbol)
-    if cached and "annualReports" in cached and "quarterlyReports" in cached:
-        return cached["annualReports"], cached["quarterlyReports"], 0, None
-
-    if call_budget <= 0:
-        raise RateLimitError("Daily call budget exhausted (pre-check).")
-
-    calls_made = 0
-    last_error = None
-
-    for candidate in _symbol_variants(symbol):
-        if call_budget - calls_made <= 0:
-            raise RateLimitError("Daily call budget exhausted (pre-check).")
-
-        data = _get({"function": "INCOME_STATEMENT", "symbol": candidate, "apikey": KEY})
-        calls_made += 1
-
-        annual = data.get("annualReports")
-        quarterly = data.get("quarterlyReports")
-        if isinstance(annual, list) and annual and isinstance(quarterly, list) and quarterly:
-            _save_income_cache(symbol, data)
-            time.sleep(THROTTLE)
-            return annual, quarterly, calls_made, None
-
-        last_error = f"INCOME_STATEMENT missing for {symbol} ({candidate}): {data}"
-        time.sleep(THROTTLE)
-
-    return None, None, calls_made, last_error or f"INCOME_STATEMENT missing for {symbol}: <no data>"
-
-
-def fetch_overview(symbol, call_budget):
-    """
-    Alpha Vantage OVERVIEW フォールバック。
-    戻り値: (overview_dict|None, api_calls_used: int, error_message|None)
-    """
-    cached = _load_overview_cache(symbol)
-    if isinstance(cached, dict):
-        return cached, 0, None
-
-    if call_budget <= 0:
-        raise RateLimitError("Daily call budget exhausted (pre-check).")
-
-    calls_made = 0
-    last_error = None
-
-    for candidate in _symbol_variants(symbol):
-        if call_budget - calls_made <= 0:
-            raise RateLimitError("Daily call budget exhausted (pre-check).")
-
-        data = _get({"function": "OVERVIEW", "symbol": candidate, "apikey": KEY})
-        calls_made += 1
-
-        if isinstance(data, dict):
-            _save_overview_cache(symbol, data)
-            time.sleep(THROTTLE)
-            return data, calls_made, None
-
-        last_error = f"OVERVIEW missing for {symbol} ({candidate}): {data}"
-        time.sleep(THROTTLE)
-
-    return None, calls_made, last_error or f"OVERVIEW missing for {symbol}: <no data>"
-
-
-def to_int(v):
-    try:
-        return int(v)
-    except:
-        return None
-
-
-def to_float(v):
-    try:
-        return float(v)
-    except:
-        return None
-
-
-def annual_checks(annual):
+def to_dataframe(records, value_key: str, revenue_key: str) -> pd.DataFrame:
     rows = []
-    for a in annual:
+    for record in records:
         rows.append(
             {
-                "year": a.get("fiscalDateEnding"),
-                "pretax": to_int(a.get("incomeBeforeTax")),  # 経常の近似: pretax
-                "revenue": to_int(a.get("totalRevenue")),
+                "period": record.period_label,
+                "end_date": record.end_date,
+                "revenue": record.revenue,
+                value_key: record.ordinary_income,
             }
         )
-    df = pd.DataFrame(rows).dropna().head(6)
-    if len(df) < 3:
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.dropna(subset=[value_key, "revenue"])
+        df = df.sort_values("end_date", ascending=False).reset_index(drop=True)
+    return df
+
+
+def annual_checks(df: pd.DataFrame) -> dict:
+    if df.empty:
         return {"enough_years": False}
-    df["pretax_yoy"] = df["pretax"].pct_change(periods=-1)
-    df["margin"] = df["pretax"] / df["revenue"]
+    df = df.copy()
+    df["ordinary_yoy"] = df["ordinary_income"].pct_change(periods=-1)
+    df["margin"] = df["ordinary_income"] / df["revenue"]
     window = df.head(5)
-    yoy = window["pretax_yoy"].dropna()
-    stable_5_10 = all(0.05 <= x <= 0.10 for x in yoy) if len(yoy) >= 3 else False
-    no_big_drop = all((x is None) or (x > -0.20) for x in yoy)
-    last1 = yoy.iloc[0] if len(yoy) >= 1 else None
-    if (
-        len(window) >= 3
-        and window["pretax"].notna().iloc[0]
-        and window["pretax"].notna().iloc[2]
-    ):
-        last2_cagr = (window["pretax"].iloc[0] / window["pretax"].iloc[2]) ** (
-            1 / 2
-        ) - 1
+    yoy_series = window["ordinary_yoy"].dropna()
+    stable_5_10 = all(0.05 <= x <= 0.10 for x in yoy_series) if len(yoy_series) >= 3 else False
+    no_big_drop = all(x > -0.20 for x in yoy_series) if not yoy_series.empty else False
+    last1 = yoy_series.iloc[0] if len(yoy_series) >= 1 else None
+    if len(window) >= 3 and pd.notna(window["ordinary_income"].iloc[0]) and pd.notna(window["ordinary_income"].iloc[2]):
+        last2_cagr = (
+            (window["ordinary_income"].iloc[0] / window["ordinary_income"].iloc[2]) ** (1 / 2)
+            - 1
+        )
     else:
         last2_cagr = None
-    return dict(
-        enough_years=True,
-        stable_5_10=stable_5_10,
-        no_big_drop=no_big_drop,
-        last1_yoy=last1,
-        last2_cagr=last2_cagr,
-        annual_df=df,
-    )
+    return {
+        "enough_years": len(df) >= 3,
+        "stable_5_10": stable_5_10,
+        "no_big_drop": no_big_drop,
+        "last1_yoy": last1,
+        "last2_cagr": last2_cagr,
+        "annual_df": df,
+    }
 
 
-def quarterly_checks(quarterly):
-    rows = []
-    for q in quarterly:
-        rows.append(
-            {
-                "quarter": q.get("fiscalDateEnding"),
-                "pretax": to_int(q.get("incomeBeforeTax")),
-                "revenue": to_int(q.get("totalRevenue")),
-            }
-        )
-    df = pd.DataFrame(rows).dropna().head(8)
-    if len(df) < 5:
+def quarterly_checks(df: pd.DataFrame) -> dict:
+    if df.empty:
         return {"enough_quarters": False}
-    df["pretax_yoy"] = (df["pretax"] - df["pretax"].shift(-4)) / df["pretax"].shift(-4)
-    df["revenue_yoy"] = (df["revenue"] - df["revenue"].shift(-4)) / df["revenue"].shift(
-        -4
-    )
-    df["margin"] = df["pretax"] / df["revenue"]
+    df = df.copy()
+    df["ordinary_yoy"] = (df["ordinary_income"] - df["ordinary_income"].shift(-4)) / df["ordinary_income"].shift(-4)
+    df["revenue_yoy"] = (df["revenue"] - df["revenue"].shift(-4)) / df["revenue"].shift(-4)
+    df["margin"] = df["ordinary_income"] / df["revenue"]
     last3 = df.iloc[0:3].copy()
     last2 = df.iloc[0:2].copy()
-    lastQ_ok = (
-        pd.notna(last3["pretax_yoy"].iloc[0]) and last3["pretax_yoy"].iloc[0] >= 0.20
-    ) and (
-        pd.notna(last3["revenue_yoy"].iloc[0]) and last3["revenue_yoy"].iloc[0] >= 0.10
+    last_q_ok = (
+        pd.notna(last3["ordinary_yoy"].iloc[0])
+        and last3["ordinary_yoy"].iloc[0] >= 0.20
+        and pd.notna(last3["revenue_yoy"].iloc[0])
+        and last3["revenue_yoy"].iloc[0] >= 0.10
     )
     sequential_ok = (
-        (last2["pretax_yoy"] >= 0.20).all() and (last2["revenue_yoy"] >= 0.10).all()
+        (last2["ordinary_yoy"] >= 0.20).all() and (last2["revenue_yoy"] >= 0.10).all()
     ) or (
-        (last3["pretax_yoy"] >= 0.20).sum() >= 2
-        and (last3["revenue_yoy"] >= 0.10).sum() >= 2
+        (last3["ordinary_yoy"] >= 0.20).sum() >= 2 and (last3["revenue_yoy"] >= 0.10).sum() >= 2
     )
     accelerating = (
-        pd.notna(df["pretax_yoy"].iloc[0])
-        and pd.notna(df["pretax_yoy"].iloc[1])
-        and df["pretax_yoy"].iloc[0] >= df["pretax_yoy"].iloc[1]
+        pd.notna(df["ordinary_yoy"].iloc[0])
+        and pd.notna(df["ordinary_yoy"].iloc[1])
+        and df["ordinary_yoy"].iloc[0] >= df["ordinary_yoy"].iloc[1]
     )
     improving_margin = (
         pd.notna(df["margin"].iloc[0])
         and pd.notna(df["margin"].iloc[4])
         and df["margin"].iloc[0] >= df["margin"].iloc[4]
-    )
-    return dict(
-        enough_quarters=True,
-        lastQ_ok=bool(lastQ_ok),
-        sequential_ok=bool(sequential_ok),
-        accelerating=bool(accelerating),
-        improving_margin=bool(improving_margin),
-        quarterly_df=df,
-    )
+    ) if len(df) >= 5 else False
+    return {
+        "enough_quarters": len(df) >= 5,
+        "lastQ_ok": bool(last_q_ok),
+        "sequential_ok": bool(sequential_ok),
+        "accelerating": bool(accelerating),
+        "improving_margin": bool(improving_margin),
+        "quarterly_df": df,
+    }
 
 
-def overview_quarterly_checks(overview: dict):
-    """
-    OVERVIEWの乏しい指標から四半期相当の最低限チェックを近似。
-    期待する主なキー: QuarterlyEarningsGrowthYOY, QuarterlyRevenueGrowthYOY, ProfitMargin
-    見つからなければNone扱い。
-    """
-    eg = to_float(overview.get("QuarterlyEarningsGrowthYOY"))
-    rg = to_float(overview.get("QuarterlyRevenueGrowthYOY"))
-    pm = to_float(overview.get("ProfitMargin"))
-
-    lastQ_ok = (eg is not None and eg >= 0.20) and (rg is not None and rg >= 0.10)
-    # 連続性/加速は情報がないため、単発のしきい値のみで判断
-    sequential_ok = bool(lastQ_ok)
-    accelerating = False  # 不明
-    improving_margin = (pm is not None and pm >= 0)  # マージンがマイナスでなければ一応OKとみなす
-
-    return dict(
-        enough_quarters=True,
-        lastQ_ok=bool(lastQ_ok),
-        sequential_ok=bool(sequential_ok),
-        accelerating=bool(accelerating),
-        improving_margin=bool(improving_margin),
-        quarterly_df=None,
-    )
-
-
-def score(ann, qrt):
+def score(annual_result: dict, quarterly_result: dict) -> Tuple[int, str]:
     s, notes = 0, []
-    if ann.get("enough_years"):
-        if ann.get("stable_5_10"):
+    if annual_result.get("enough_years"):
+        if annual_result.get("stable_5_10"):
             s += 1
         else:
             notes.append("年率5–10%の安定成長は未達")
-        if ann.get("no_big_drop"):
+        if annual_result.get("no_big_drop"):
             s += 1
         else:
             notes.append("途中に大幅減益あり")
-        if ann.get("last1_yoy") is not None and ann["last1_yoy"] >= 0.20:
+        if annual_result.get("last1_yoy") is not None and annual_result["last1_yoy"] >= 0.20:
             s += 1
         else:
             notes.append("直近1年+20%未満")
-        if ann.get("last2_cagr") is not None and ann["last2_cagr"] >= 0.20:
+        if annual_result.get("last2_cagr") is not None and annual_result["last2_cagr"] >= 0.20:
             s += 1
         else:
             notes.append("直近2年CAGR+20%未満")
     else:
         notes.append("年次データ不足")
-    if qrt.get("enough_quarters"):
-        if qrt.get("lastQ_ok"):
+
+    if quarterly_result.get("enough_quarters"):
+        if quarterly_result.get("lastQ_ok"):
             s += 1
         else:
-            notes.append("直近Q: pretax+20% & 売上+10% 未達")
-        if qrt.get("sequential_ok"):
+            notes.append("直近Q: 経常+20% & 売上+10% 未達")
+        if quarterly_result.get("sequential_ok"):
             s += 1
         else:
             notes.append("直近2–3Qの連続クリア未達")
-        if qrt.get("accelerating"):
+        if quarterly_result.get("accelerating"):
             s += 1
         else:
-            notes.append("pretax成長の加速なし")
-        if qrt.get("improving_margin"):
+            notes.append("経常成長の加速なし")
+        if quarterly_result.get("improving_margin"):
             s += 1
         else:
-            notes.append("売上高経常(pretax)利益率のYoY改善なし")
+            notes.append("経常利益率のYoY改善なし")
     else:
         notes.append("四半期データ不足")
+
     return s, "; ".join(notes)
 
 
-def perplexity_digest(symbol: str):
+def perplexity_digest(symbol: str) -> str:
     if not PPX_KEY:
         return ""
     url = "https://api.perplexity.ai/chat/completions"
@@ -388,221 +166,127 @@ def perplexity_digest(symbol: str):
         "return_citations": True,
     }
     try:
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
-        r.raise_for_status()
-        j = r.json()
-        return j.get("choices", [{}])[0].get("message", {}).get("content", "")
-    except Exception as e:
-        return f"(Perplexity要約失敗: {e})"
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    except Exception as exc:
+        return f"(Perplexity要約失敗: {exc})"
 
 
-def perc(x):
-    return "" if x is None else f"{x*100:.1f}%"
+def load_symbols(path: str) -> List[str]:
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        symbols = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+    return symbols
+
+
+def perc(value: float) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return f"{value * 100:.1f}%"
 
 
 def main():
-    # symbols 読み込みと防御
-    if not os.path.exists(SYMBOLS_PATH):
-        print(f"[screen] {SYMBOLS_PATH} がありません。終了。")
-        pd.DataFrame([]).to_csv(REPORT_CSV, index=False, encoding="utf-8")
-        with open(REPORT_MD, "w", encoding="utf-8") as f:
-            f.write(
-                f"# 日次スクリーナー（{TODAY} JST）\n\nシンボルファイルが見つかりませんでした。"
-            )
-        print("Saved (empty):", REPORT_CSV, REPORT_MD)
-        return
-
-    with open(SYMBOLS_PATH, "r", encoding="utf-8") as f:
-        symbols = [x.strip() for x in f if x.strip() and not x.strip().startswith("#")]
-    symbols = symbols[:MAX_SYMBOLS]
+    symbols = load_symbols(SYMBOLS_PATH)[:MAX_SYMBOLS]
     if not symbols:
-        print("[screen] シンボルが0件のため、処理せず終了（正常）。")
+        print(f"[screen] シンボルが0件のため、処理せず終了（正常）。")
         pd.DataFrame([]).to_csv(REPORT_CSV, index=False, encoding="utf-8")
         with open(REPORT_MD, "w", encoding="utf-8") as f:
             f.write(f"# 日次スクリーナー（{TODAY} JST）\n\nシンボルが0件でした。")
-        print("Saved (empty):", REPORT_CSV, REPORT_MD)
         return
 
+    provider = FinancialDataProvider()
     rows = []
-    errors = []  # 表に出さない。注記にまとめる
-    skipped = []  # 日次上限等で未処理になった銘柄
-    used_api_calls = 0
-    used_cache = 0
-    hit_rate_limit = False
+    errors: List[str] = []
 
-    for i, sym in enumerate(symbols, 1):
-        print(f"[{i}/{len(symbols)}] {sym}")
-
+    for idx, symbol in enumerate(symbols, 1):
+        print(f"[{idx}/{len(symbols)}] {symbol}")
         try:
-            budget_left = MAX_DAILY_CALLS - used_api_calls
-            annual, quarterly, api_calls_used, fetch_err = fetch_income_statement(
-                sym, budget_left
-            )
-        except RateLimitError as e:
-            hit_rate_limit = True
-            errors.append(f"{sym}: {str(e)}")
-            skipped.extend(symbols[i:])
-            break
-        except Exception as e:
-            errors.append(f"{sym}: fetch_income_statement error: {e}")
-            continue
+            annual_records = provider.get_annual(symbol)
+            quarterly_records = provider.get_quarterly(symbol)
 
-        used_api_calls += api_calls_used
-        if api_calls_used == 0 and fetch_err is None:
-            used_cache += 1
+            annual_df = to_dataframe(annual_records, "ordinary_income", "revenue")
+            quarterly_df = to_dataframe(quarterly_records, "ordinary_income", "revenue")
 
-        if fetch_err is None:
-            ann = annual_checks(annual)
-            qrt = quarterly_checks(quarterly)
-            sc, notes = score(ann, qrt)
+            annual_result = annual_checks(annual_df)
+            quarterly_result = quarterly_checks(quarterly_df)
 
-            last1 = ann.get("last1_yoy")
-            last2 = ann.get("last2_cagr")
+            sc, notes = score(annual_result, quarterly_result)
+
+            last1 = annual_result.get("last1_yoy")
+            last2 = annual_result.get("last2_cagr")
             lastQ = (
-                qrt.get("quarterly_df").iloc[0] if qrt.get("enough_quarters") else None
+                quarterly_result.get("quarterly_df").iloc[0]
+                if quarterly_result.get("enough_quarters") and quarterly_result.get("quarterly_df") is not None
+                else None
             )
-            lastQ_pre_yoy = (
-                None
-                if (lastQ is None or pd.isna(lastQ["pretax_yoy"]))
-                else float(lastQ["pretax_yoy"])
-            )
-            lastQ_rev_yoy = (
-                None
-                if (lastQ is None or pd.isna(lastQ["revenue_yoy"]))
-                else float(lastQ["revenue_yoy"])
-            )
+            lastQ_pre_yoy = None if lastQ is None else lastQ.get("ordinary_yoy")
+            lastQ_rev_yoy = None if lastQ is None else lastQ.get("revenue_yoy")
 
             rows.append(
                 {
-                    "symbol": sym,
+                    "symbol": symbol,
                     "score_0to7": sc,
-                    "annual_last1_yoy": None if last1 is None else round(last1, 4),
-                    "annual_last2_cagr": None if last2 is None else round(last2, 4),
-                    "q_last_pretax_yoy": (
-                        None if lastQ_pre_yoy is None else round(lastQ_pre_yoy, 4)
-                    ),
-                    "q_last_revenue_yoy": (
-                        None if lastQ_rev_yoy is None else round(lastQ_rev_yoy, 4)
-                    ),
-                    "q_last_ok_20_10": qrt.get("lastQ_ok"),
-                    "q_seq_ok": qrt.get("sequential_ok"),
-                    "q_accelerating": qrt.get("accelerating"),
-                    "q_improving_margin": qrt.get("improving_margin"),
+                    "annual_last1_yoy": last1,
+                    "annual_last2_cagr": last2,
+                    "q_last_pretax_yoy": lastQ_pre_yoy,
+                    "q_last_revenue_yoy": lastQ_rev_yoy,
+                    "q_last_ok_20_10": quarterly_result.get("lastQ_ok"),
+                    "q_seq_ok": quarterly_result.get("sequential_ok"),
+                    "q_accelerating": quarterly_result.get("accelerating"),
+                    "q_improving_margin": quarterly_result.get("improving_margin"),
                     "notes": notes,
-                    "digest": perplexity_digest(sym) if sc >= 3 else "",
+                    "digest": perplexity_digest(symbol) if sc >= 3 else "",
                 }
             )
-            continue
+        except Exception as exc:
+            errors.append(f"{symbol}: {exc}")
 
-        fallback_reason = fetch_err
-
-        try:
-            budget_left = MAX_DAILY_CALLS - used_api_calls
-            overview, overview_calls_used, overview_err = fetch_overview(
-                sym, budget_left
-            )
-        except RateLimitError as e:
-            hit_rate_limit = True
-            errors.append(f"{sym}: {str(e)}")
-            skipped.extend(symbols[i:])
-            break
-        except Exception as e:
-            errors.append(f"{sym}: {fallback_reason}; fallback error: {e}")
-            continue
-
-        used_api_calls += overview_calls_used
-        if overview_calls_used == 0 and overview_err is None:
-            used_cache += 1
-
-        if overview_err is not None:
-            errors.append(f"{sym}: {fallback_reason}; fallback: {overview_err}")
-            continue
-
-        qrt = overview_quarterly_checks(overview)
-        sc, notes = score({"enough_years": False}, qrt)
-        notes = ("(OVERVIEW fallback) " + notes).strip()
-
-        lastQ_pre_yoy = to_float(overview.get("QuarterlyEarningsGrowthYOY"))
-        lastQ_rev_yoy = to_float(overview.get("QuarterlyRevenueGrowthYOY"))
-
-        rows.append(
-            {
-                "symbol": sym,
-                "score_0to7": sc,
-                "annual_last1_yoy": None,
-                "annual_last2_cagr": None,
-                "q_last_pretax_yoy": lastQ_pre_yoy,
-                "q_last_revenue_yoy": lastQ_rev_yoy,
-                "q_last_ok_20_10": qrt.get("lastQ_ok"),
-                "q_seq_ok": qrt.get("sequential_ok"),
-                "q_accelerating": qrt.get("accelerating"),
-                "q_improving_margin": qrt.get("improving_margin"),
-                "notes": notes,
-                "digest": perplexity_digest(sym) if sc >= 3 else "",
-            }
-        )
-
-    # もし残り予算ゼロで未処理が出た場合、それもスキップとして記録
-    if used_api_calls >= MAX_DAILY_CALLS:
-        # キャッシュ命中なら処理続行しているはずだが、未処理が残る可能性がある
-        # ループのbreakはしないが、明示的に記録
-        pass
-
-    # DataFrame化（表は成功銘柄のみ）
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values(["score_0to7", "symbol"], ascending=[False, True])
-        df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
-    else:
-        # 空でもCSVを出す
-        df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
+    df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
 
-    # Markdown: ヘッダ＋集計＋表＋注記
     summary_lines = [
         f"# 日次スクリーナー（{TODAY} JST）\n",
-        "※ 経常利益の近似として **incomeBeforeTax (preTax)** を使用。\n",
+        "※ データ出典: Yahoo!ファイナンス / 株探（かぶたん）。\n",
         f"- 処理銘柄（表に掲載）: **{len(df)}** 件\n",
-        f"- Alpha Vantage API 使用回数: **{used_api_calls}** / 上限 {MAX_DAILY_CALLS}\n",
-        f"- キャッシュ命中: **{used_cache}** 件\n",
+        f"- 入力シンボル数: {len(symbols)} 件\n",
     ]
-    if hit_rate_limit:
-        summary_lines.append(f"- ⚠️ レート制限に到達。以降の銘柄はスキップしました。\n")
-    if skipped:
-        summary_lines.append(
-            f"- スキップした銘柄（上限/制限等）: {', '.join(skipped)}\n"
-        )
 
-    table_lines = []
+    table_lines: List[str]
     if not df.empty:
-        table_lines += [
+        table_lines = [
             "|Symbol|Score|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
             "|---|---:|---:|---:|---:|---:|:---:|:---:|:---:|:---:|---|",
         ]
-        for r in df.to_dict("records"):
+        for record in df.to_dict("records"):
             table_lines.append(
-                f"|{r['symbol']}|{r.get('score_0to7','')}|"
-                f"{perc(r.get('annual_last1_yoy'))}|"
-                f"{perc(r.get('annual_last2_cagr'))}|"
-                f"{perc(r.get('q_last_pretax_yoy'))}|"
-                f"{perc(r.get('q_last_revenue_yoy'))}|"
-                f"{'✅' if r.get('q_last_ok_20_10') else '—'}|"
-                f"{'✅' if r.get('q_seq_ok') else '—'}|"
-                f"{'✅' if r.get('q_accelerating') else '—'}|"
-                f"{'✅' if r.get('q_improving_margin') else '—'}|"
-                f"{r.get('notes','')}|"
+                f"|{record['symbol']}|{record.get('score_0to7', '')}|"
+                f"{perc(record.get('annual_last1_yoy'))}|"
+                f"{perc(record.get('annual_last2_cagr'))}|"
+                f"{perc(record.get('q_last_pretax_yoy'))}|"
+                f"{perc(record.get('q_last_revenue_yoy'))}|"
+                f"{'✅' if record.get('q_last_ok_20_10') else '—'}|"
+                f"{'✅' if record.get('q_seq_ok') else '—'}|"
+                f"{'✅' if record.get('q_accelerating') else '—'}|"
+                f"{'✅' if record.get('q_improving_margin') else '—'}|"
+                f"{record.get('notes', '')}|"
             )
-            if r.get("digest"):
-                table_lines.append(f"\n**{r['symbol']} 要約**\n\n{r['digest']}\n")
+            if record.get("digest"):
+                table_lines.append(f"\n**{record['symbol']} 要約**\n\n{record['digest']}\n")
     else:
-        table_lines.append("> 表示可能なデータがありませんでした。")
+        table_lines = ["> 表示可能なデータがありませんでした。"]
 
-    notes_lines = []
+    notes_lines: List[str] = []
     if errors:
-        notes_lines += ["\n### 注記（処理できなかった銘柄など）\n"]
-        for e in errors[:50]:
-            notes_lines.append(f"- {e}")
+        notes_lines.append("\n### 注記（処理できなかった銘柄など）\n")
+        for err in errors[:50]:
+            notes_lines.append(f"- {err}")
         if len(errors) > 50:
-            notes_lines.append(f"- …ほか {len(errors)-50} 件")
+            notes_lines.append(f"- …ほか {len(errors) - 50} 件")
 
     with open(REPORT_MD, "w", encoding="utf-8") as f:
         f.write("\n".join(summary_lines + ["\n"] + table_lines + ["\n"] + notes_lines))
@@ -612,3 +296,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -1,0 +1,70 @@
+name: screener-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_fetch_first:
+        description: "Run fetch_symbols_ppx.py before screener"
+        required: false
+        default: "false"
+      throttle_seconds:
+        description: "Override THROTTLE_SECONDS (default 13)"
+        required: false
+        default: "13"
+      max_symbols:
+        description: "Override MAX_SYMBOLS (default 60)"
+        required: false
+        default: "60"
+
+jobs:
+  screener:
+    runs-on: ubuntu-latest
+    env:
+      PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+      THROTTLE_SECONDS: ${{ inputs.throttle_seconds || '13' }}
+      MAX_SYMBOLS: ${{ inputs.max_symbols || '60' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt
+
+      - name: Optional fetch step
+        if: ${{ inputs.run_fetch_first == 'true' }}
+        run: |
+          python scripts/fetch_symbols_ppx.py
+          echo "----- config/symbols.txt -----"
+          cat config/symbols.txt || true
+
+      - name: Ensure config/symbols.txt exists
+        run: |
+          if [ ! -s config/symbols.txt ]; then
+            echo "config/symbols.txt が存在しないためスクリーナーを実行できません" >&2
+            exit 1
+          fi
+
+      - name: Run screener
+        run: |
+          python scripts/screener.py
+
+      - name: Show latest report
+        run: |
+          ls -1 reports
+          latest_md=$(ls -t reports/screen_*.md | head -n 1)
+          echo "----- Latest Markdown report: $latest_md -----"
+          cat "$latest_md"
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screener-reports
+          path: |
+            reports/screen_*.md
+            reports/screen_*.csv
+          if-no-files-found: warn

@@ -1,0 +1,43 @@
+name: fetch-symbols-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      throttle_seconds:
+        description: "Override THROTTLE_SECONDS (default 13)"
+        required: false
+        default: "13"
+      max_symbols:
+        description: "Override MAX_SYMBOLS (default 80)"
+        required: false
+        default: "80"
+jobs:
+  fetch-symbols:
+    runs-on: ubuntu-latest
+    env:
+      PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+      THROTTLE_SECONDS: ${{ inputs.throttle_seconds || '13' }}
+      MAX_SYMBOLS: ${{ inputs.max_symbols || '80' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt
+
+      - name: Run fetch_symbols_ppx
+        run: |
+          python scripts/fetch_symbols_ppx.py
+          echo "----- config/symbols.txt -----"
+          cat config/symbols.txt || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: config-symbols
+          path: config/symbols.txt
+          if-no-files-found: warn

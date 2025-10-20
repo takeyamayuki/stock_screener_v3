@@ -4,19 +4,19 @@ from typing import List
 
 # --- 環境変数 ---
 PPX_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
-AV_KEY = os.environ.get("ALPHAVANTAGE_KEY", "")
 THROTTLE = int(os.environ.get("THROTTLE_SECONDS", "13"))
 MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "200"))
-USE_AV_OVERVIEW_FILTER = (
-    os.environ.get("USE_AV_OVERVIEW_FILTER", "false").lower() == "true"
-)
-AV_OVERVIEW_DAILY_BUDGET = int(os.environ.get("AV_OVERVIEW_DAILY_BUDGET", "5"))
 
 # --- パス ---
 os.makedirs("config", exist_ok=True)
 os.makedirs("cache", exist_ok=True)
 SYMBOLS_PATH = "config/symbols.txt"
 CACHE_PATH = "cache/overview.json"
+
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
+)
 
 # --- プロンプト（JSON出力を強制） ---
 PROMPTS = [
@@ -135,88 +135,32 @@ def save_cache(d):
 
 CACHE = load_cache()
 
-# av_overview_asset_type をラップして日次回数を制御
-_av_calls = 0
 
-
-def _symbol_variants(symbol: str):
-    """Alpha Vantage向けのシンボル候補を列挙（東京市場: .T/.TYO/.TSE/.JP, 無し）。"""
-    seen = set()
-
-    def push(value: str):
-        v = value.strip()
-        if v and v not in seen:
-            seen.add(v)
-            return True
-        return False
-
-    if push(symbol):
-        yield symbol
-
-    if "." in symbol:
-        base, suffix = symbol.split(".", 1)
-        if push(base):
-            yield base
-
-        suffix = suffix.upper()
-        if suffix == "T":
-            for alt in ("TYO", "TSE", "JP"):
-                candidate = f"{base}.{alt}"
-                if push(candidate):
-                    yield candidate
-
-
-def av_overview_asset_type(symbol_t: str) -> str:
-    global _av_calls
-    if not AV_KEY or not USE_AV_OVERVIEW_FILTER:
-        return ""  # ← フィルタ無効なら何もせず戻る
-
-    # まずキャッシュ
+def yahoo_stock_type(symbol_t: str) -> str:
     now_ts = dt.datetime.utcnow().timestamp()
-    if symbol_t in CACHE and now_ts - CACHE[symbol_t].get("ts", 0) < 7 * 24 * 3600:
-        return (CACHE[symbol_t].get("asset") or "").upper()
+    cached = CACHE.get(symbol_t)
+    if cached and now_ts - cached.get("ts", 0) < 24 * 3600:
+        return (cached.get("asset") or "").upper()
 
-    # 日次の呼び出し上限
-    if _av_calls >= AV_OVERVIEW_DAILY_BUDGET:
-        return ""  # ← これ以上AVは叩かない（残りはそのまま通す）
-
-    url = "https://www.alphavantage.co/query"
-    last_asset = ""
-
-    for candidate in _symbol_variants(symbol_t):
-        if _av_calls >= AV_OVERVIEW_DAILY_BUDGET:
-            break
-
-        _av_calls += 1
-        try:
-            params = {"function": "OVERVIEW", "symbol": candidate, "apikey": AV_KEY}
-            rr = requests.get(url, params=params, timeout=60)
-            rr.raise_for_status()
-            j = rr.json()
-
-            if isinstance(j, dict) and "Information" in j:
-                break  # レート制限通知
-
-            if isinstance(j, dict):
-                asset = (j.get("AssetType") or "").upper()
-                if asset:
-                    CACHE[symbol_t] = {
-                        "asset": asset,
-                        "ts": now_ts,
-                        "source": candidate,
-                    }
-                    save_cache(CACHE)
-                    return asset
-                last_asset = asset
-        except Exception:
-            pass
-        finally:
-            time.sleep(THROTTLE)
-
-    if symbol_t not in CACHE:
-        CACHE[symbol_t] = {"asset": last_asset, "ts": now_ts}
+    url = f"https://finance.yahoo.co.jp/quote/{symbol_t}/performance"
+    try:
+        resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+        resp.raise_for_status()
+        text = resp.text
+        match = re.search(r'"priceBoard":\{([^}]*)\}', text)
+        asset = ""
+        if match:
+            block = match.group(1)
+            m2 = re.search(r'"stockType":"([^"\\]+)"', block)
+            if m2:
+                asset = m2.group(1).upper()
+        CACHE[symbol_t] = {"asset": asset, "ts": now_ts}
         save_cache(CACHE)
-    return last_asset
+        time.sleep(THROTTLE)
+        return asset
+    except Exception as exc:
+        print(f"[fetch][yahoo] asset type lookup failed for {symbol_t}: {exc}", file=sys.stderr)
+        return ""
 
 
 def main():
@@ -234,12 +178,12 @@ def main():
         )
         return
 
-    # 3) .T付与 + ETF/ETN/REIT等の除外（可能な範囲）
+    # 3) .T付与 + ETF/ETN/REIT等の除外（Yahoo!ファイナンスで判定）
     symbols = []
     # シンボル作成ループはそのまま。asset が ETF/ETN/REIT のときだけ除外。
     for c in codes:
         sym_t = f"{c}.T"
-        asset = av_overview_asset_type(sym_t)  # ← 上の制御が効く
+        asset = yahoo_stock_type(sym_t)
         if asset in {"ETF", "ETN", "REIT", "CLOSEDEND FUND"}:
             continue
         symbols.append(sym_t)
