@@ -24,6 +24,10 @@ os.makedirs("reports", exist_ok=True)
 INCACHE_DIR = "cache/av_income"
 os.makedirs(INCACHE_DIR, exist_ok=True)
 
+# OVERVIEW フォールバック用キャッシュ
+OVERCACHE_DIR = "cache/av_overview"
+os.makedirs(OVERCACHE_DIR, exist_ok=True)
+
 
 class RateLimitError(Exception):
     pass
@@ -71,6 +75,38 @@ def _save_income_cache(symbol: str, data: dict):
     shutil.move(tmp, _cache_path(symbol))
 
 
+def _ov_cache_path(symbol: str) -> str:
+    safe = symbol.replace("/", "_")
+    return os.path.join(OVERCACHE_DIR, f"{safe}.json")
+
+
+def _load_overview_cache(symbol: str):
+    p = _ov_cache_path(symbol)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        ts = data.get("_cached_at")
+        if not ts:
+            return None
+        cached_dt = datetime.fromisoformat(ts)
+        if datetime.utcnow() - cached_dt > timedelta(days=CACHE_DAYS):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _save_overview_cache(symbol: str, data: dict):
+    data = dict(data)
+    data["_cached_at"] = datetime.utcnow().isoformat()
+    tmp = _ov_cache_path(symbol) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    shutil.move(tmp, _ov_cache_path(symbol))
+
+
 def fetch_income_statement(symbol, call_budget):
     """
     call_budget: 残りAPIコール可能数（0ならAPIを叩かずキャッシュのみ）
@@ -95,9 +131,37 @@ def fetch_income_statement(symbol, call_budget):
     return data["annualReports"], data["quarterlyReports"], True
 
 
+def fetch_overview(symbol, call_budget):
+    """
+    Alpha Vantage OVERVIEW フォールバック。
+    戻り値: (overview_dict, used_api_call: bool)
+    """
+    cached = _load_overview_cache(symbol)
+    if cached and isinstance(cached, dict) and cached:
+        return cached, False
+
+    if call_budget <= 0:
+        raise RateLimitError("Daily call budget exhausted (pre-check).")
+
+    data = _get({"function": "OVERVIEW", "symbol": symbol, "apikey": KEY})
+    # OVERVIEWはキーが少なくても空dictで返ることがあるため、空dictでも行として処理可能にする
+    if not isinstance(data, dict):
+        raise RuntimeError(f"OVERVIEW missing for {symbol}: {data}")
+    _save_overview_cache(symbol, data)
+    time.sleep(THROTTLE)
+    return data, True
+
+
 def to_int(v):
     try:
         return int(v)
+    except:
+        return None
+
+
+def to_float(v):
+    try:
+        return float(v)
     except:
         return None
 
@@ -190,6 +254,32 @@ def quarterly_checks(quarterly):
         accelerating=bool(accelerating),
         improving_margin=bool(improving_margin),
         quarterly_df=df,
+    )
+
+
+def overview_quarterly_checks(overview: dict):
+    """
+    OVERVIEWの乏しい指標から四半期相当の最低限チェックを近似。
+    期待する主なキー: QuarterlyEarningsGrowthYOY, QuarterlyRevenueGrowthYOY, ProfitMargin
+    見つからなければNone扱い。
+    """
+    eg = to_float(overview.get("QuarterlyEarningsGrowthYOY"))
+    rg = to_float(overview.get("QuarterlyRevenueGrowthYOY"))
+    pm = to_float(overview.get("ProfitMargin"))
+
+    lastQ_ok = (eg is not None and eg >= 0.20) and (rg is not None and rg >= 0.10)
+    # 連続性/加速は情報がないため、単発のしきい値のみで判断
+    sequential_ok = bool(lastQ_ok)
+    accelerating = False  # 不明
+    improving_margin = (pm is not None and pm >= 0)  # マージンがマイナスでなければ一応OKとみなす
+
+    return dict(
+        enough_quarters=True,
+        lastQ_ok=bool(lastQ_ok),
+        sequential_ok=bool(sequential_ok),
+        accelerating=bool(accelerating),
+        improving_margin=bool(improving_margin),
+        quarterly_df=None,
     )
 
 
@@ -294,7 +384,12 @@ def main():
         print(f"[{i}/{len(symbols)}] {sym}")
         try:
             budget_left = MAX_DAILY_CALLS - used_api_calls
+            # 事前にキャッシュ有無を確認し、APIコールが発生した場合の失敗も計上できるようにする
+            income_cached = _load_income_cache(sym)
+            expect_api_call = income_cached is None and budget_left > 0
+
             annual, quarterly, used_api = fetch_income_statement(sym, budget_left)
+            # 成否に関わらず、呼び出しが発生した場合は使用回数に反映
             used_api_calls += int(used_api)
             used_cache += int(not used_api)
 
@@ -347,8 +442,60 @@ def main():
             break
 
         except Exception as e:
-            # データ欠損など通常エラーは注記にまとめるだけ。行は追加しない。
-            errors.append(f"{sym}: {e}")
+            # INCOME_STATEMENT のAPI呼び出しが発生していた場合は失敗でも1回分加算
+            try:
+                used_api_calls += int(expect_api_call)
+            except Exception:
+                pass
+            # INCOME_STATEMENTが欠損など → OVERVIEWでフォールバックを試す
+            try:
+                budget_left = MAX_DAILY_CALLS - used_api_calls
+                # OVERVIEWのキャッシュ状況を確認し、失敗時でも適切にカウントする
+                overview_cached = _load_overview_cache(sym)
+                expect_api_call_ov = overview_cached is None and budget_left > 0
+
+                overview, used_api_ov = fetch_overview(sym, budget_left)
+                used_api_calls += int(used_api_ov)
+                used_cache += int(not used_api_ov)
+
+                ann = {"enough_years": False}  # 年次は不明
+                qrt = overview_quarterly_checks(overview)
+                sc, notes = score(ann, qrt)
+                notes = ("(OVERVIEW fallback) " + notes).strip()
+
+                # 主要表示値（年次はNone、四半期はOVERVIEWのYoY）
+                lastQ_pre_yoy = to_float(overview.get("QuarterlyEarningsGrowthYOY"))
+                lastQ_rev_yoy = to_float(overview.get("QuarterlyRevenueGrowthYOY"))
+
+                rows.append(
+                    {
+                        "symbol": sym,
+                        "score_0to7": sc,
+                        "annual_last1_yoy": None,
+                        "annual_last2_cagr": None,
+                        "q_last_pretax_yoy": lastQ_pre_yoy,
+                        "q_last_revenue_yoy": lastQ_rev_yoy,
+                        "q_last_ok_20_10": qrt.get("lastQ_ok"),
+                        "q_seq_ok": qrt.get("sequential_ok"),
+                        "q_accelerating": qrt.get("accelerating"),
+                        "q_improving_margin": qrt.get("improving_margin"),
+                        "notes": notes,
+                        "digest": perplexity_digest(sym) if sc >= 3 else "",
+                    }
+                )
+            except RateLimitError as e2:
+                hit_rate_limit = True
+                errors.append(f"{sym}: {str(e2)}")
+                skipped.extend(symbols[i:])
+                break
+            except Exception as e2:
+                # OVERVIEW のAPI呼び出しが発生していた場合は失敗でも1回分加算
+                try:
+                    used_api_calls += int(expect_api_call_ov)
+                except Exception:
+                    pass
+                # どちらも取得できない場合のみエラー記録
+                errors.append(f"{sym}: {e}; fallback: {e2}")
 
     # もし残り予算ゼロで未処理が出た場合、それもスキップとして記録
     if used_api_calls >= MAX_DAILY_CALLS:
