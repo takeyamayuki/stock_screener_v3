@@ -29,11 +29,18 @@ class YahooJapanProvider:
         self.session = session or requests.Session()
         self.session.headers.setdefault("User-Agent", USER_AGENT)
 
-    def _fetch_html(self, symbol: str, params: Optional[dict] = None) -> str:
+    def _fetch_html(self, symbol: str, params: Optional[dict] = None) -> Optional[str]:
         url = self.BASE_URL.format(symbol=symbol)
-        resp = self.session.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.text
+        try:
+            resp = self.session.get(url, params=params, timeout=30)
+            if resp.status_code >= 500:
+                LOGGER.debug("Yahoo JP %s returned %s", url, resp.status_code)
+                return None
+            resp.raise_for_status()
+            return resp.text
+        except requests.RequestException as exc:
+            LOGGER.debug("Yahoo JP request failed for %s: %s", url, exc)
+            return None
 
     def _extract_performance(self, html: str) -> Optional[list]:
         idx = html.find('"performance":{"performance"')
@@ -57,6 +64,8 @@ class YahooJapanProvider:
 
     def get_annual(self, symbol: str) -> List[AnnualRecord]:
         html = self._fetch_html(symbol)
+        if html is None:
+            return []
         nodes = self._extract_performance(html) or []
         records: List[AnnualRecord] = []
         for node in nodes:
@@ -89,6 +98,8 @@ class YahooJapanProvider:
 
     def get_quarterly(self, symbol: str) -> List[QuarterlyRecord]:
         html = self._fetch_html(symbol, params={"term": "quarter"})
+        if html is None:
+            return []
         nodes = self._extract_performance(html) or []
         records: List[QuarterlyRecord] = []
         for node in nodes:
@@ -115,4 +126,3 @@ class YahooJapanProvider:
                 )
             )
         return records
-

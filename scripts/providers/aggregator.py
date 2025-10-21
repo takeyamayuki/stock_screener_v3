@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Iterable, List, Optional
 
 from .kabutan import KabutanProvider
 from .models import AnnualRecord, QuarterlyRecord
 from .yahoo_jp import YahooJapanProvider
+
+LOGGER = logging.getLogger(__name__)
 
 
 class FinancialDataProvider:
@@ -41,11 +44,27 @@ class FinancialDataProvider:
         return sorted(merged.values(), key=lambda r: r.end_date, reverse=True)
 
     def get_annual(self, symbol: str) -> List[AnnualRecord]:
-        kabutan_records = self.kabutan.get_annual(symbol)
-        yahoo_records = self.yahoo.get_annual(symbol)
+        try:
+            kabutan_records = self.kabutan.get_annual(symbol)
+        except Exception as exc:
+            LOGGER.debug("Kabutan annual fetch failed for %s: %s", symbol, exc)
+            kabutan_records = []
+        try:
+            yahoo_records = self.yahoo.get_annual(symbol)
+        except Exception as exc:
+            LOGGER.debug("Yahoo annual fetch failed for %s: %s", symbol, exc)
+            yahoo_records = []
         return self._merge_annual(kabutan_records, yahoo_records)
 
     def get_quarterly(self, symbol: str) -> List[QuarterlyRecord]:
-        kabutan_records = self.kabutan.get_quarterly(symbol)
-        yahoo_records = self.yahoo.get_quarterly(symbol)
+        try:
+            kabutan_records = self.kabutan.get_quarterly(symbol)
+        except Exception as exc:
+            LOGGER.debug("Kabutan quarterly fetch failed for %s: %s", symbol, exc)
+            kabutan_records = []
+        try:
+            yahoo_records = self.yahoo.get_quarterly(symbol)
+        except Exception as exc:
+            LOGGER.debug("Yahoo quarterly fetch failed for %s: %s", symbol, exc)
+            yahoo_records = []
         return self._merge_quarterly(kabutan_records, yahoo_records)
