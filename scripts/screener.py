@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 import requests
 from dateutil import tz
 
-from providers import FinancialDataProvider
+from providers import CompanyInfo, FinancialDataProvider
 
 PPX_KEY = os.environ.get("PERPLEXITY_API_KEY")
-THROTTLE = int(os.environ.get("THROTTLE_SECONDS", "13"))
 MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "60"))
+FINANCIAL_RETRY_ATTEMPTS = int(os.environ.get("FINANCIAL_RETRY_ATTEMPTS", "1"))
+FINANCIAL_RETRY_DELAY = float(os.environ.get("FINANCIAL_RETRY_DELAY", "3"))
+SYMBOL_DELAY_SECONDS = float(os.environ.get("SYMBOL_DELAY_SECONDS", "0"))
 
 JST = tz.gettz("Asia/Tokyo")
 TODAY = datetime.now(JST).strftime("%Y%m%d")
@@ -188,6 +191,33 @@ def perc(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def fetch_financials(provider: FinancialDataProvider, symbol: str) -> Tuple[list, list]:
+    attempts = FINANCIAL_RETRY_ATTEMPTS + 1
+    last_annual: list = []
+    last_quarterly: list = []
+    for attempt in range(attempts):
+        annual_records = provider.get_annual(symbol)
+        quarterly_records = provider.get_quarterly(symbol)
+        if annual_records or quarterly_records:
+            return annual_records, quarterly_records
+        last_annual, last_quarterly = annual_records, quarterly_records
+        if FINANCIAL_RETRY_DELAY > 0 and attempt < attempts - 1:
+            time.sleep(FINANCIAL_RETRY_DELAY)
+    return last_annual, last_quarterly
+
+
+def fetch_company_info(provider: FinancialDataProvider, symbol: str) -> Optional[CompanyInfo]:
+    attempts = FINANCIAL_RETRY_ATTEMPTS + 1
+    info: Optional[CompanyInfo] = None
+    for attempt in range(attempts):
+        info = provider.get_company_info(symbol)
+        if info:
+            return info
+        if FINANCIAL_RETRY_DELAY > 0 and attempt < attempts - 1:
+            time.sleep(FINANCIAL_RETRY_DELAY)
+    return info
+
+
 def main():
     symbols = load_symbols(SYMBOLS_PATH)[:MAX_SYMBOLS]
     if not symbols:
@@ -204,8 +234,10 @@ def main():
     for idx, symbol in enumerate(symbols, 1):
         print(f"[{idx}/{len(symbols)}] {symbol}")
         try:
-            annual_records = provider.get_annual(symbol)
-            quarterly_records = provider.get_quarterly(symbol)
+            annual_records, quarterly_records = fetch_financials(provider, symbol)
+            if not annual_records and not quarterly_records:
+                errors.append(f"{symbol}: financial data unavailable after retries")
+                continue
 
             annual_df = to_dataframe(annual_records, "ordinary_income", "revenue")
             quarterly_df = to_dataframe(quarterly_records, "ordinary_income", "revenue")
@@ -225,7 +257,7 @@ def main():
             lastQ_pre_yoy = None if lastQ is None else lastQ.get("ordinary_yoy")
             lastQ_rev_yoy = None if lastQ is None else lastQ.get("revenue_yoy")
 
-            info = provider.get_company_info(symbol)
+            info = fetch_company_info(provider, symbol)
             rows.append(
                 {
                     "symbol": symbol,
@@ -246,6 +278,9 @@ def main():
             )
         except Exception as exc:
             errors.append(f"{symbol}: {exc}")
+        finally:
+            if SYMBOL_DELAY_SECONDS > 0:
+                time.sleep(SYMBOL_DELAY_SECONDS)
 
     df = pd.DataFrame(rows)
     if not df.empty:

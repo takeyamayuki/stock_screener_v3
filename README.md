@@ -14,6 +14,8 @@
 ## 調整ポイント
 - 最大銘柄数：`.github/workflows/screener.yml` の `MAX_SYMBOLS`
 - 市場ごとの取得目標数：`TARGET_PER_MARKET`（デフォルト20件）
+- 取得リトライ：`FINANCIAL_RETRY_ATTEMPTS`（デフォルト1回）、リトライ間隔 `FINANCIAL_RETRY_DELAY`（秒）
+- シンボル間のウェイト：`SYMBOL_DELAY_SECONDS`（デフォルト0秒）
 - レート制限：`THROTTLE_SECONDS`（無料枠は ~5req/min、13–15秒推奨）
 - 判定ロジック：`scripts/screener.py` の `annual_checks` / `quarterly_checks` / `score`
 
