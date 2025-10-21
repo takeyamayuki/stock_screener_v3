@@ -276,6 +276,7 @@ def main():
     ]
 
     table_lines: List[str]
+    digest_lines: List[str] = []
     if not df.empty:
         table_lines = [
             "|Symbol|銘柄名|市場|Score|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
@@ -296,7 +297,9 @@ def main():
                 f"{record.get('notes', '')}|"
             )
             if record.get("digest"):
-                table_lines.append(f"\n**{record['symbol']} 要約**\n\n{record['digest']}\n")
+                digest_lines.append(
+                    f"**{record['symbol']} 要約**\n\n{record['digest']}\n"
+                )
     else:
         table_lines = ["> 表示可能なデータがありませんでした。"]
 
@@ -309,16 +312,11 @@ def main():
             notes_lines.append(f"- …ほか {len(errors) - 50} 件")
 
     with open(REPORT_MD, "w", encoding="utf-8") as f:
-        f.write(
-            "\n".join(
-                summary_lines
-                + ["\n### 指標の見方\n"] + column_guides
-                + ["\n"]
-                + table_lines
-                + ["\n"]
-                + notes_lines
-            )
-        )
+        sections: List[str] = summary_lines + ["\n### 指標の見方\n"] + column_guides + ["\n"] + table_lines
+        if digest_lines:
+            sections += ["\n"] + digest_lines
+        sections += ["\n"] + notes_lines
+        f.write("\n".join(sections))
 
     print("Saved:", REPORT_CSV, REPORT_MD)
 
