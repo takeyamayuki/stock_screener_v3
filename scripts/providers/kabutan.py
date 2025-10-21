@@ -127,7 +127,7 @@ class KabutanProvider:
 
         records: List[QuarterlyRecord] = []
         for row in table.select("tbody tr"):
-            cells = row.find_all("td")
+            cells = [cell for cell in row.find_all(["th", "td"])]
             if not cells:
                 continue
             label = cells[0].get_text(strip=True)
@@ -165,4 +165,3 @@ class KabutanProvider:
                 )
             )
         return records
-
