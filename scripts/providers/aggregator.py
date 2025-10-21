@@ -4,7 +4,7 @@ import logging
 from typing import Iterable, List, Optional
 
 from .kabutan import KabutanProvider
-from .models import AnnualRecord, QuarterlyRecord
+from .models import AnnualRecord, CompanyInfo, QuarterlyRecord
 from .yahoo_jp import YahooJapanProvider
 
 LOGGER = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ class FinancialDataProvider:
     def __init__(self) -> None:
         self.yahoo = YahooJapanProvider()
         self.kabutan = KabutanProvider()
+        self._info_cache: dict[str, CompanyInfo] = {}
 
     @staticmethod
     def _merge_annual(*record_sets: Iterable[AnnualRecord]) -> List[AnnualRecord]:
@@ -68,3 +69,16 @@ class FinancialDataProvider:
             LOGGER.debug("Yahoo quarterly fetch failed for %s: %s", symbol, exc)
             yahoo_records = []
         return self._merge_quarterly(kabutan_records, yahoo_records)
+
+    def get_company_info(self, symbol: str) -> Optional[CompanyInfo]:
+        cached = self._info_cache.get(symbol)
+        if cached:
+            return cached
+        try:
+            info = self.kabutan.get_company_info(symbol)
+        except Exception as exc:
+            LOGGER.debug("Kabutan company info fetch failed for %s: %s", symbol, exc)
+            info = None
+        if info:
+            self._info_cache[symbol] = info
+        return info

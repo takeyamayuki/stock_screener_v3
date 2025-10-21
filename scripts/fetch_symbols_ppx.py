@@ -1,202 +1,230 @@
-import os, re, json, sys, time, datetime as dt
+import json
+import os
+import re
+import sys
+from typing import Dict, Iterable, List, Optional, Tuple
+
 import requests
-from typing import List
+from bs4 import BeautifulSoup
+
+from providers.kabutan import KabutanProvider
 
 # --- 環境変数 ---
 PPX_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
-THROTTLE = int(os.environ.get("THROTTLE_SECONDS", "13"))
 MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "200"))
+TARGET_PER_MARKET = int(os.environ.get("TARGET_PER_MARKET", "20"))
 
 # --- パス ---
 os.makedirs("config", exist_ok=True)
-os.makedirs("cache", exist_ok=True)
 SYMBOLS_PATH = "config/symbols.txt"
-CACHE_PATH = "cache/overview.json"
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
 )
 
-# --- プロンプト（JSON出力を強制） ---
-PROMPTS = [
-    # 日本語
-    (
-        "あなたは日本の株式市場の最新ニュースを参照できます。"
-        "「今日（日本時間）の日本株で52週高値を更新した銘柄」のうち、"
-        "東証プライム・スタンダード・グロース市場の上場企業のみを対象に、"
-        "4桁の証券コードだけを抽出してください。"
-        "ETF・ETN・REIT・投資信託・投資法人は除外してください。"
-        "出力は **JSONのみ** で、次の形にしてください：\n"
-        '{"codes": ["1234", "5678", ...]}\n'
-        "JSON以外の文章は一切出力しないでください。"
-    ),
-    # 英語フォールバック
-    (
-        "You can browse up-to-date Japanese market news. "
-        "List Japanese stocks that hit a 52-week high today (Japan time), "
-        "limited to TSE Prime/Standard/Growth listings. Exclude ETFs/ETNs/REITs/funds. "
-        "Return **JSON only** in the exact shape: "
-        '{"codes": ["1234", "5678", ...]} '
-        "Do not output any non-JSON text."
-    ),
-]
-
-# --- 株探フォールバック（最終手段） ---
 KABUTAN_URL = "https://kabutan.jp/warning/record_w52_high_price/"
+
+MARKET_ABBR_TO_NAME = {
+    "東Ｐ": "プライム",
+    "東Ｓ": "スタンダード",
+    "東Ｇ": "グロース",
+}
+TARGET_MARKETS = tuple(MARKET_ABBR_TO_NAME.values())
+
+MARKET_PROMPTS: Dict[str, Iterable[str]] = {
+    "プライム": [
+        (
+            "あなたは日本の株式市場の速報データを参照できます。"
+            "本日（日本時間）52週高値を更新した東証プライム銘柄を、"
+            "4桁の証券コードのみで20件以上リストアップしてください。"
+            "ETF・ETN・REIT・投資法人は除外してください。"
+            "出力は **JSONのみ** で、形は {\"codes\": [\"1234\", ...]} とします。"
+        ),
+        (
+            "You can browse up-to-date Japanese market data. "
+            "List at least twenty TSE Prime stocks that made new 52-week highs today "
+            "(Japan time). Output only the four-digit stock codes in JSON: "
+            '{"codes": ["1234", "5678", ...]}. Exclude ETFs/ETNs/REITs.'
+        ),
+    ],
+    "スタンダード": [
+        (
+            "あなたは日本の株式市場の速報データを参照できます。"
+            "本日52週高値を更新した東証スタンダード銘柄を、"
+            "4桁コードだけで20件以上リストアップしてください。"
+            "ETF・ETN・REIT・投資法人は除外し、出力は {\"codes\": [...]} のJSONのみとします。"
+        ),
+        (
+            "You can browse up-to-date Japanese market data. "
+            "Provide at least twenty four-digit codes of TSE Standard stocks hitting "
+            "52-week highs today (Japan time). Output JSON only in the form "
+            '{"codes": [...]}. Exclude ETFs/ETNs/REITs.'
+        ),
+    ],
+    "グロース": [
+        (
+            "あなたは日本の株式市場の速報データを参照できます。"
+            "本日52週高値を更新した東証グロース銘柄を、"
+            "4桁コードのみで30件程度列挙してください。"
+            "ETF等は除外し、JSON (\"codes\": [...]) のみを返してください。"
+        ),
+        (
+            "You can browse up-to-date Japanese market data. "
+            "List around thirty TSE Growth stocks that set a 52-week high today. "
+            "Return JSON only in the format {\"codes\": [...]}. Exclude ETFs/ETNs/REITs."
+        ),
+    ],
+}
+
+
+def log(msg: str) -> None:
+    print(msg, file=sys.stderr)
 
 
 def perplexity_fetch_json(prompt: str, model: str) -> dict:
     url = "https://api.perplexity.ai/chat/completions"
     headers = {"Authorization": f"Bearer {PPX_KEY}", "Content-Type": "application/json"}
     payload = {
-        "model": model,  # "sonar-pro" or "sonar"
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "return_citations": True,
         "temperature": 0.0,
     }
-    r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
-    r.raise_for_status()
-    content = r.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-    # JSONブロックを安全に抽出
+    resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
+    resp.raise_for_status()
+    content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
     try:
-        # contentがJSONそのもの or 前後に不要文字があるケース両対応
         start = content.find("{")
         end = content.rfind("}")
         if start != -1 and end != -1:
-            js = content[start : end + 1]
-            return json.loads(js)
+            return json.loads(content[start : end + 1])
     except Exception:
         pass
     return {}
 
 
-def try_perplexity_codes() -> List[str]:
+def try_perplexity_codes_for_market(market: str) -> List[str]:
     if not PPX_KEY:
         return []
-    # モデル切替＋プロンプト再試行（堅牢化）
-    for model in ["sonar-pro", "sonar"]:
-        for pr in PROMPTS:
+    prompts = MARKET_PROMPTS.get(market, [])
+    for model in ("sonar-pro", "sonar"):
+        for prompt in prompts:
             try:
-                js = perplexity_fetch_json(pr, model)
+                js = perplexity_fetch_json(prompt, model)
                 codes = js.get("codes") if isinstance(js, dict) else None
                 if isinstance(codes, list):
-                    # 4桁のみ
-                    codes = [c for c in codes if re.fullmatch(r"\d{4}", str(c))]
-                    if codes:
-                        return sorted(set(codes))
-            except Exception as e:
-                print(f"[fetch][ppx] {model} failed: {e}", file=sys.stderr)
+                    filtered = [c for c in codes if re.fullmatch(r"\d{4}", str(c))]
+                    if filtered:
+                        return filtered
+            except Exception as exc:
+                log(f"[fetch][ppx] {model}/{market} failed: {exc}")
     return []
 
 
-def kabutan_fallback_codes() -> List[str]:
-    """最終フォールバック：株探の当日52週高値ページを1回取得して4桁コード抽出"""
-    try:
-        import bs4
-        from bs4 import BeautifulSoup
-    except Exception:
-        print(
-            "[fetch] beautifulsoup4/lxml が無いため株探フォールバック不可。",
-            file=sys.stderr,
-        )
-        return []
-
-    try:
-        rr = requests.get(KABUTAN_URL, timeout=60)
-        rr.raise_for_status()
-        soup = BeautifulSoup(rr.text, "lxml")
-        codes = []
-        for tr in soup.select("table.stock_table tbody tr"):
-            tds = tr.find_all("td")
-            if not tds:
-                continue
-            code = tds[0].get_text(strip=True)
-            if re.fullmatch(r"\d{4}", code):
-                codes.append(code)
-        return sorted(set(codes))
-    except Exception as e:
-        print(f"[fetch][kabutan] 失敗: {e}", file=sys.stderr)
-        return []
-
-
-def load_cache():
-    try:
-        with open(CACHE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def save_cache(d):
-    with open(CACHE_PATH, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
-
-
-CACHE = load_cache()
-
-
-def yahoo_stock_type(symbol_t: str) -> str:
-    now_ts = dt.datetime.utcnow().timestamp()
-    cached = CACHE.get(symbol_t)
-    if cached and now_ts - cached.get("ts", 0) < 24 * 3600:
-        return (cached.get("asset") or "").upper()
-
-    url = f"https://finance.yahoo.co.jp/quote/{symbol_t}/performance"
-    try:
-        resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
-        resp.raise_for_status()
-        text = resp.text
-        match = re.search(r'"priceBoard":\{([^}]*)\}', text)
-        asset = ""
-        if match:
-            block = match.group(1)
-            m2 = re.search(r'"stockType":"([^"\\]+)"', block)
-            if m2:
-                asset = m2.group(1).upper()
-        CACHE[symbol_t] = {"asset": asset, "ts": now_ts}
-        save_cache(CACHE)
-        time.sleep(THROTTLE)
-        return asset
-    except Exception as exc:
-        print(f"[fetch][yahoo] asset type lookup failed for {symbol_t}: {exc}", file=sys.stderr)
-        return ""
-
-
-def main():
-    # 1) Perplexityで取得（JSON想定）
-    codes = try_perplexity_codes()
-
-    # 2) 取れなければ、株探フォールバック
-    if not codes:
-        print("[fetch] コード抽出に失敗。株探フォールバックへ。", file=sys.stderr)
-        codes = kabutan_fallback_codes()
-
-    if not codes:
-        print(
-            "[fetch] それでもコードゼロ。既存symbols.txtを維持します。", file=sys.stderr
-        )
-        return
-
-    # 3) .T付与 + ETF/ETN/REIT等の除外（Yahoo!ファイナンスで判定）
-    symbols = []
-    # シンボル作成ループはそのまま。asset が ETF/ETN/REIT のときだけ除外。
-    for c in codes:
-        sym_t = f"{c}.T"
-        asset = yahoo_stock_type(sym_t)
-        if asset in {"ETF", "ETN", "REIT", "CLOSEDEND FUND"}:
-            continue
-        symbols.append(sym_t)
-        if len(symbols) >= MAX_SYMBOLS:
+def iter_kabutan_candidates(max_pages: int = 60) -> Iterable[Tuple[str, Optional[str]]]:
+    for page in range(1, max_pages + 1):
+        try:
+            resp = requests.get(
+                KABUTAN_URL,
+                params={"page": page},
+                headers={"User-Agent": USER_AGENT},
+                timeout=30,
+            )
+            if resp.status_code == 404:
+                break
+            resp.raise_for_status()
+        except Exception as exc:
+            log(f"[fetch][kabutan] page {page} failed: {exc}")
             break
+        soup = BeautifulSoup(resp.text, "lxml")
+        rows = soup.select("table.stock_table tbody tr")
+        if not rows:
+            break
+        for tr in rows:
+            cells = tr.find_all("td")
+            if not cells:
+                continue
+            code = cells[0].get_text(strip=True)
+            market_raw = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+            if not re.fullmatch(r"\d{4}", code):
+                continue
+            yield code, MARKET_ABBR_TO_NAME.get(market_raw)
 
-    # 4) 全除外ならフォールバックでそのまま書く
-    if not symbols:
-        symbols = [f"{c}.T" for c in codes[:MAX_SYMBOLS]]
+
+KABUTAN_PROVIDER = KabutanProvider()
+INFO_CACHE: Dict[str, Optional[str]] = {}
+
+
+def lookup_market(code: str) -> Optional[str]:
+    cached = INFO_CACHE.get(code)
+    if cached is not None:
+        return cached
+    try:
+        info = KABUTAN_PROVIDER.get_company_info(f"{code}.T")
+        market = info.market if info else None
+    except Exception as exc:
+        log(f"[fetch][kabutan-info] {code} failed: {exc}")
+        market = None
+    INFO_CACHE[code] = market
+    return market
+
+
+def add_codes(
+    collected: Dict[str, List[str]],
+    codes_with_market: Iterable[Tuple[str, Optional[str]]],
+) -> None:
+    for code, market in codes_with_market:
+        if market not in TARGET_MARKETS:
+            continue
+        bucket = collected[market]
+        if len(bucket) >= TARGET_PER_MARKET:
+            continue
+        if code in bucket:
+            continue
+        bucket.append(code)
+
+
+def ensure_minimum_codes(collected: Dict[str, List[str]]) -> None:
+    for market in TARGET_MARKETS:
+        if len(collected[market]) >= TARGET_PER_MARKET:
+            continue
+        ppx_codes = try_perplexity_codes_for_market(market)
+        if not ppx_codes:
+            continue
+        verified = []
+        for code in ppx_codes:
+            mk = lookup_market(code)
+            if mk == market and code not in verified:
+                verified.append(code)
+        add_codes(collected, [(code, market) for code in verified])
+
+
+def flatten_symbols(collected: Dict[str, List[str]]) -> List[str]:
+    ordered = []
+    for market in TARGET_MARKETS:
+        ordered.extend(collected[market][:TARGET_PER_MARKET])
+    return [f"{code}.T" for code in ordered]
+
+
+def main() -> None:
+    collected: Dict[str, List[str]] = {market: [] for market in TARGET_MARKETS}
+
+    add_codes(collected, iter_kabutan_candidates(max_pages=60))
+    ensure_minimum_codes(collected)
+
+    totals = {market: len(codes) for market, codes in collected.items()}
+    for market, count in totals.items():
+        if count < TARGET_PER_MARKET:
+            log(f"[fetch] {market} は {count} 件しか取得できませんでした。")
+
+    symbols = flatten_symbols(collected)
+    if MAX_SYMBOLS:
+        symbols = symbols[:MAX_SYMBOLS]
 
     with open(SYMBOLS_PATH, "w", encoding="utf-8") as f:
-        f.write("\n".join(symbols) + "\n")
-    print(f"[fetch] {len(symbols)} symbols written to {SYMBOLS_PATH}")
+        f.write("\n".join(symbols) + ("\n" if symbols else ""))
+    log(f"[fetch] {len(symbols)} symbols written to {SYMBOLS_PATH}")
 
 
 if __name__ == "__main__":

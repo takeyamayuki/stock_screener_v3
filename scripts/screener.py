@@ -225,9 +225,12 @@ def main():
             lastQ_pre_yoy = None if lastQ is None else lastQ.get("ordinary_yoy")
             lastQ_rev_yoy = None if lastQ is None else lastQ.get("revenue_yoy")
 
+            info = provider.get_company_info(symbol)
             rows.append(
                 {
                     "symbol": symbol,
+                    "name_jp": info.name if info else "",
+                    "market": info.market if info else "",
                     "score_0to7": sc,
                     "annual_last1_yoy": last1,
                     "annual_last2_cagr": last2,
@@ -256,15 +259,32 @@ def main():
         f"- 入力シンボル数: {len(symbols)} 件\n",
     ]
 
+    column_guides = [
+        "- `Symbol`: 東証ティッカー（例: 2726.T）。",
+        "- `銘柄名`: Kabutanより取得した日本語正式名。",
+        "- `市場`: 東証の市場区分（プライム/スタンダード/グロースなど）。",
+        "- `Score`: 年次・四半期チェックの合計スコア（0〜7）。",
+        "- `直近1Y YoY`: 直近通期の経常利益YoY（前年比）。",
+        "- `直近2Y CAGR`: 直近2期の経常利益CAGR。",
+        "- `Q(pretax YoY)`: 直近四半期の経常利益YoY。",
+        "- `Q(rev YoY)`: 直近四半期の売上高YoY。",
+        "- `Q基準達成`: 直近四半期で「経常+20% & 売上+10%」を満たしたか。",
+        "- `連続性`: 直近2-3四半期で基準を複数回満たしたか。",
+        "- `加速`: 経常YoYが直近で加速しているか。",
+        "- `率改善`: 経常利益率が前年同期比で改善しているか。",
+        "- `メモ`: 未達項目や注意点のまとめ。",
+    ]
+
     table_lines: List[str]
     if not df.empty:
         table_lines = [
-            "|Symbol|Score|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
-            "|---|---:|---:|---:|---:|---:|:---:|:---:|:---:|:---:|---|",
+            "|Symbol|銘柄名|市場|Score|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
+            "|---|---|---|---:|---:|---:|---:|---:|:---:|:---:|:---:|:---:|---|",
         ]
         for record in df.to_dict("records"):
             table_lines.append(
-                f"|{record['symbol']}|{record.get('score_0to7', '')}|"
+                f"|{record['symbol']}|{record.get('name_jp', '')}|{record.get('market', '')}|"
+                f"{record.get('score_0to7', '')}|"
                 f"{perc(record.get('annual_last1_yoy'))}|"
                 f"{perc(record.get('annual_last2_cagr'))}|"
                 f"{perc(record.get('q_last_pretax_yoy'))}|"
@@ -289,11 +309,19 @@ def main():
             notes_lines.append(f"- …ほか {len(errors) - 50} 件")
 
     with open(REPORT_MD, "w", encoding="utf-8") as f:
-        f.write("\n".join(summary_lines + ["\n"] + table_lines + ["\n"] + notes_lines))
+        f.write(
+            "\n".join(
+                summary_lines
+                + ["\n### 指標の見方\n"] + column_guides
+                + ["\n"]
+                + table_lines
+                + ["\n"]
+                + notes_lines
+            )
+        )
 
     print("Saved:", REPORT_CSV, REPORT_MD)
 
 
 if __name__ == "__main__":
     main()
-

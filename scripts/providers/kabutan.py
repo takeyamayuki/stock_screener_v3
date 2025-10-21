@@ -8,7 +8,7 @@ from typing import List, Optional
 import requests
 from bs4 import BeautifulSoup
 
-from .models import AnnualRecord, QuarterlyRecord
+from .models import AnnualRecord, CompanyInfo, QuarterlyRecord
 from .utils import (
     last_day_of_month,
     parse_quarter_range,
@@ -32,6 +32,12 @@ class KabutanProvider:
     """Fetch financial tables from kabutan.jp."""
 
     BASE_URL = "https://kabutan.jp/stock/finance"
+    COMPANY_URL = "https://kabutan.jp/stock/"
+    MARKET_MAP = {
+        "東証Ｐ": "プライム",
+        "東証Ｓ": "スタンダード",
+        "東証Ｇ": "グロース",
+    }
 
     def __init__(self, session: Optional[requests.Session] = None) -> None:
         self.session = session or requests.Session()
@@ -40,6 +46,12 @@ class KabutanProvider:
     def _fetch_dom(self, symbol: str) -> BeautifulSoup:
         code = symbol.split(".")[0]
         resp = self.session.get(self.BASE_URL, params={"code": code}, timeout=30)
+        resp.raise_for_status()
+        return BeautifulSoup(resp.text, "lxml")
+
+    def _fetch_company_dom(self, symbol: str) -> BeautifulSoup:
+        code = symbol.split(".")[0]
+        resp = self.session.get(f"{self.COMPANY_URL}?code={code}", timeout=30)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "lxml")
 
@@ -115,6 +127,22 @@ class KabutanProvider:
             if not is_forecast:
                 records.append(record)
         return records
+
+    def get_company_info(self, symbol: str) -> Optional[CompanyInfo]:
+        soup = self._fetch_company_dom(symbol)
+        name_node = soup.select_one("div.company_block h3")
+        market_node = soup.select_one("span.market")
+        if not name_node and not market_node:
+            return None
+        raw_market = market_node.get_text(strip=True) if market_node else None
+        mapped_market = self.MARKET_MAP.get(raw_market, raw_market)
+        return CompanyInfo(
+            symbol=symbol,
+            name=name_node.get_text(strip=True) if name_node else None,
+            market=mapped_market,
+            market_label=raw_market,
+            source="kabutan",
+        )
 
     def get_quarterly(self, symbol: str) -> List[QuarterlyRecord]:
         soup = self._fetch_dom(symbol)

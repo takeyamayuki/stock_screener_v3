@@ -1,8 +1,8 @@
 # JP 52-Week High Screener (No-Scrape)
 
-- Perplexity API で当日の「日本株 52週高値（P/S/G）」一覧を取得
+- Perplexity API と株探ランキングを組み合わせ、東証プライム/スタンダード/グロースの52週高値銘柄を網羅的に取得（各市場20件を目標）
 - Yahoo!ファイナンス日本版と株探の財務データを組み合わせて独自基準でスコアリング
-- CSV/Markdown を reports/ に日次出力（JST 08:30）
+- 銘柄名・市場区分・指標の説明を含む CSV/Markdown を reports/ に日次出力（JST 08:30）
 
 ## Setup
 
@@ -13,6 +13,7 @@
 
 ## 調整ポイント
 - 最大銘柄数：`.github/workflows/screener.yml` の `MAX_SYMBOLS`
+- 市場ごとの取得目標数：`TARGET_PER_MARKET`（デフォルト20件）
 - レート制限：`THROTTLE_SECONDS`（無料枠は ~5req/min、13–15秒推奨）
 - 判定ロジック：`scripts/screener.py` の `annual_checks` / `quarterly_checks` / `score`
 
@@ -23,4 +24,4 @@
 ## 注意
 - 日本の「経常利益」は Yahoo!ファイナンス／株探の公表値を利用。
 - 52週高値の“一覧”はPerplexityの検索に依存（スクレイピング不要）。
-- ETF/REIT 等は Yahoo!ファイナンス `priceBoard.stockType` で除外。
+- ETF/REIT 等は株探の市場区分（東証Ｐ/Ｓ/Ｇ以外）で除外。

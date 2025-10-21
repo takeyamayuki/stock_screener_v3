@@ -33,3 +33,13 @@ class QuarterlyRecord:
     unit: str
     source: str
 
+
+@dataclass
+class CompanyInfo:
+    """Basic company metadata."""
+
+    symbol: str
+    name: Optional[str]
+    market: Optional[str]
+    market_label: Optional[str]
+    source: str
