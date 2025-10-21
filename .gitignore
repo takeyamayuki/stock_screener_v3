@@ -1,0 +1,16 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Editor and OS junk
+.DS_Store
+.idea/
+.vscode/
+
+# Local caches and temp files
+tmp_*.html
+tmp/
+.mypy_cache/
+.pytest_cache/
+
