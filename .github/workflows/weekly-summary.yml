@@ -1,0 +1,31 @@
+name: weekly-highlights
+
+on:
+  schedule:
+    - cron: '30 15 * * FRI' # JST 00:30 on Saturday (UTC-9h)
+  workflow_dispatch:
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate weekly summary (reports/)
+        run: python scripts/generate_weekly_summary.py
+
+      - name: Commit summary
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add reports/weekly_summary_*.md || true
+          if git diff --cached --quiet; then
+            echo "No summary changes"
+          else
+            git commit -m "weekly summary: $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+            git push
+          fi
