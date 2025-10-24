@@ -3,13 +3,16 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import pandas as pd
 import requests
 from dateutil import tz
 
-from providers import CompanyInfo, FinancialDataProvider
+try:  # pragma: no cover - allows running as script and as package
+    from providers import CompanyInfo, FinancialDataProvider
+except ImportError:  # pragma: no cover
+    from .providers import CompanyInfo, FinancialDataProvider
 
 PPX_KEY = os.environ.get("PERPLEXITY_API_KEY")
 MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "60"))
@@ -218,6 +221,75 @@ def fetch_company_info(provider: FinancialDataProvider, symbol: str) -> Optional
     return info
 
 
+def compose_markdown(
+    df: pd.DataFrame,
+    errors: Iterable[str],
+    num_input_symbols: int,
+) -> str:
+    summary_lines = [
+        f"# 日次スクリーナー（{TODAY} JST）\n",
+        "※ データ出典: Yahoo!ファイナンス / 株探（かぶたん）。\n",
+        f"- 処理銘柄（表に掲載）: **{len(df)}** 件\n",
+        f"- 入力シンボル数: {num_input_symbols} 件\n",
+    ]
+
+    column_guides = [
+        "- `Symbol`: 東証ティッカー（例: 2726.T）。",
+        "- `銘柄名`: Kabutanより取得した日本語正式名。",
+        "- `市場`: 東証の市場区分（プライム/スタンダード/グロースなど）。",
+        "- `Score`: 年次・四半期チェックの合計スコア（0〜7）。",
+        "- `直近1Y YoY`: 直近通期の経常利益YoY（前年比）。",
+        "- `直近2Y CAGR`: 直近2期の経常利益CAGR。",
+        "- `Q(pretax YoY)`: 直近四半期の経常利益YoY。",
+        "- `Q(rev YoY)`: 直近四半期の売上高YoY。",
+        "- `Q基準達成`: 直近四半期で「経常+20% & 売上+10%」を満たしたか。",
+        "- `連続性`: 直近2-3四半期で基準を複数回満たしたか。",
+        "- `加速`: 経常YoYが直近で加速しているか。",
+        "- `率改善`: 経常利益率が前年同期比で改善しているか。",
+        "- `メモ`: 未達項目や注意点のまとめ。",
+    ]
+
+    digest_lines: List[str] = []
+    if not df.empty:
+        table_lines = [
+            "|Symbol|銘柄名|市場|Score|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
+            "|---|---|---|---:|---:|---:|---:|---:|:---:|:---:|:---:|:---:|---|",
+        ]
+        for record in df.to_dict("records"):
+            table_lines.append(
+                f"|{record['symbol']}|{record.get('name_jp', '')}|{record.get('market', '')}|"
+                f"{record.get('score_0to7', '')}|"
+                f"{perc(record.get('annual_last1_yoy'))}|"
+                f"{perc(record.get('annual_last2_cagr'))}|"
+                f"{perc(record.get('q_last_pretax_yoy'))}|"
+                f"{perc(record.get('q_last_revenue_yoy'))}|"
+                f"{'✅' if record.get('q_last_ok_20_10') else '—'}|"
+                f"{'✅' if record.get('q_seq_ok') else '—'}|"
+                f"{'✅' if record.get('q_accelerating') else '—'}|"
+                f"{'✅' if record.get('q_improving_margin') else '—'}|"
+                f"{record.get('notes', '')}|"
+            )
+            if record.get("digest"):
+                digest_lines.append(f"**{record['symbol']} 要約**\n\n{record['digest']}\n")
+    else:
+        table_lines = ["> 表示可能なデータがありませんでした。"]
+
+    notes_lines: List[str] = []
+    errors = list(errors)
+    if errors:
+        notes_lines.append("\n### 注記（処理できなかった銘柄など）\n")
+        for err in errors[:50]:
+            notes_lines.append(f"- {err}")
+        if len(errors) > 50:
+            notes_lines.append(f"- …ほか {len(errors) - 50} 件")
+
+    sections: List[str] = summary_lines + ["\n### 指標の見方\n"] + column_guides + ["\n"] + table_lines
+    if digest_lines:
+        sections += ["\n"] + digest_lines
+    sections += ["\n"] + notes_lines
+    return "\n".join(sections)
+
+
 def main():
     symbols = load_symbols(SYMBOLS_PATH)[:MAX_SYMBOLS]
     if not symbols:
@@ -287,71 +359,9 @@ def main():
         df = df.sort_values(["score_0to7", "symbol"], ascending=[False, True])
     df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
 
-    summary_lines = [
-        f"# 日次スクリーナー（{TODAY} JST）\n",
-        "※ データ出典: Yahoo!ファイナンス / 株探（かぶたん）。\n",
-        f"- 処理銘柄（表に掲載）: **{len(df)}** 件\n",
-        f"- 入力シンボル数: {len(symbols)} 件\n",
-    ]
-
-    column_guides = [
-        "- `Symbol`: 東証ティッカー（例: 2726.T）。",
-        "- `銘柄名`: Kabutanより取得した日本語正式名。",
-        "- `市場`: 東証の市場区分（プライム/スタンダード/グロースなど）。",
-        "- `Score`: 年次・四半期チェックの合計スコア（0〜7）。",
-        "- `直近1Y YoY`: 直近通期の経常利益YoY（前年比）。",
-        "- `直近2Y CAGR`: 直近2期の経常利益CAGR。",
-        "- `Q(pretax YoY)`: 直近四半期の経常利益YoY。",
-        "- `Q(rev YoY)`: 直近四半期の売上高YoY。",
-        "- `Q基準達成`: 直近四半期で「経常+20% & 売上+10%」を満たしたか。",
-        "- `連続性`: 直近2-3四半期で基準を複数回満たしたか。",
-        "- `加速`: 経常YoYが直近で加速しているか。",
-        "- `率改善`: 経常利益率が前年同期比で改善しているか。",
-        "- `メモ`: 未達項目や注意点のまとめ。",
-    ]
-
-    table_lines: List[str]
-    digest_lines: List[str] = []
-    if not df.empty:
-        table_lines = [
-            "|Symbol|銘柄名|市場|Score|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
-            "|---|---|---|---:|---:|---:|---:|---:|:---:|:---:|:---:|:---:|---|",
-        ]
-        for record in df.to_dict("records"):
-            table_lines.append(
-                f"|{record['symbol']}|{record.get('name_jp', '')}|{record.get('market', '')}|"
-                f"{record.get('score_0to7', '')}|"
-                f"{perc(record.get('annual_last1_yoy'))}|"
-                f"{perc(record.get('annual_last2_cagr'))}|"
-                f"{perc(record.get('q_last_pretax_yoy'))}|"
-                f"{perc(record.get('q_last_revenue_yoy'))}|"
-                f"{'✅' if record.get('q_last_ok_20_10') else '—'}|"
-                f"{'✅' if record.get('q_seq_ok') else '—'}|"
-                f"{'✅' if record.get('q_accelerating') else '—'}|"
-                f"{'✅' if record.get('q_improving_margin') else '—'}|"
-                f"{record.get('notes', '')}|"
-            )
-            if record.get("digest"):
-                digest_lines.append(
-                    f"**{record['symbol']} 要約**\n\n{record['digest']}\n"
-                )
-    else:
-        table_lines = ["> 表示可能なデータがありませんでした。"]
-
-    notes_lines: List[str] = []
-    if errors:
-        notes_lines.append("\n### 注記（処理できなかった銘柄など）\n")
-        for err in errors[:50]:
-            notes_lines.append(f"- {err}")
-        if len(errors) > 50:
-            notes_lines.append(f"- …ほか {len(errors) - 50} 件")
-
+    markdown = compose_markdown(df, errors, len(symbols))
     with open(REPORT_MD, "w", encoding="utf-8") as f:
-        sections: List[str] = summary_lines + ["\n### 指標の見方\n"] + column_guides + ["\n"] + table_lines
-        if digest_lines:
-            sections += ["\n"] + digest_lines
-        sections += ["\n"] + notes_lines
-        f.write("\n".join(sections))
+        f.write(markdown)
 
     print("Saved:", REPORT_CSV, REPORT_MD)
 

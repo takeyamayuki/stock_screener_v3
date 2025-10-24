@@ -7,7 +7,10 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import requests
 from bs4 import BeautifulSoup
 
-from providers.kabutan import KabutanProvider
+try:  # pragma: no cover - support both package and script execution
+    from providers.kabutan import KabutanProvider
+except ImportError:  # pragma: no cover
+    from .providers.kabutan import KabutanProvider
 
 # --- 環境変数 ---
 PPX_KEY = os.environ.get("PERPLEXITY_API_KEY", "")

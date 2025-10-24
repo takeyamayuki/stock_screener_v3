@@ -27,3 +27,10 @@
 - 日本の「経常利益」は Yahoo!ファイナンス／株探の公表値を利用。
 - 52週高値の“一覧”はPerplexityの検索に依存（スクレイピング不要）。
 - ETF/REIT 等は株探の市場区分（東証Ｐ/Ｓ/Ｇ以外）で除外。
+
+## テストの実行
+
+```
+python -m pip install -r requirements-dev.txt
+pytest
+```
