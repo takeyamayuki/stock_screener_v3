@@ -6,6 +6,16 @@ from bs4 import BeautifulSoup
 from scripts.providers.kabutan import KabutanProvider
 
 
+class DummyResponse:
+    def __init__(self, text="", status=200):
+        self.text = text
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError("error")
+
+
 @pytest.fixture(scope="module")
 def finance_html():
     return Path("tests/fixtures/html/kabutan_5032_finance.html").read_text(encoding="utf-8")
@@ -51,3 +61,71 @@ def test_kabutan_get_company_info(monkeypatch, company_html):
     assert info.name == "ＡＮＹＣＯＬＯＲ"
     assert info.market == "プライム"
     assert info.market_label == "東証Ｐ"
+
+
+def test_fetch_dom_uses_session(monkeypatch):
+    provider = KabutanProvider()
+
+    def fake_get(url, params=None, timeout=30):
+        assert params == {"code": "5032"}
+        return DummyResponse("<html></html>")
+
+    provider.session.get = fake_get  # type: ignore[attr-defined]
+    soup = provider._fetch_dom("5032.T")
+    assert soup is not None
+
+
+def test_fetch_company_dom(monkeypatch):
+    provider = KabutanProvider()
+
+    def fake_get(url, timeout=30):
+        assert url.endswith("?code=5032")
+        return DummyResponse("<html></html>")
+
+    provider.session.get = fake_get  # type: ignore[attr-defined]
+    soup = provider._fetch_company_dom("5032.T")
+    assert soup is not None
+
+
+def test_get_annual_handles_missing_table(monkeypatch):
+    monkeypatch.setattr(KabutanProvider, "_fetch_dom", lambda self, symbol: BeautifulSoup("<html></html>", "lxml"))
+    provider = KabutanProvider()
+    assert provider.get_annual("5032.T") == []
+
+
+def test_get_annual_parses_ifrs(monkeypatch):
+    html = '''<table><tbody>
+        <tr><th><span class="kubun1">I</span>2024.03</th><td>1,000</td><td>忽略</td><td>500</td></tr>
+        <tr><th>dummy</th><td>0</td><td>0</td><td>0</td></tr>
+        <tr><th>dummy</th><td>0</td><td>0</td><td>0</td></tr>
+        <tr><th>dummy</th><td>0</td><td>0</td><td>0</td></tr>
+        <tr><th>dummy</th><td>0</td><td>0</td><td>0</td></tr>
+        <tr><th>dummy</th><td>0</td><td>0</td><td>0</td></tr>
+    </tbody></table><ul class="info"><li>単位：百万円</li></ul>'''
+    monkeypatch.setattr(KabutanProvider, "_fetch_dom", lambda self, symbol: BeautifulSoup("<html></html>", "lxml"))
+    monkeypatch.setattr(KabutanProvider, "_find_table", lambda self, soup, heading, min_rows, max_rows: BeautifulSoup(html, "lxml").find("table"))
+    provider = KabutanProvider()
+    records = provider.get_annual("5032.T")
+    assert records[0].accounting_standard == "IFRS"
+
+
+def test_get_quarterly_parses_rows(monkeypatch):
+    html = '''<table><tbody>
+        <tr><td>2024.01-03</td><td>1,000</td><td>無視</td><td>300</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+        <tr><td>dummy</td><td>0</td><td>0</td><td>0</td></tr>
+    </tbody></table><ul class="info"><li>単位：百万円</li></ul>'''
+    monkeypatch.setattr(KabutanProvider, "_fetch_dom", lambda self, symbol: BeautifulSoup("<html></html>", "lxml"))
+    monkeypatch.setattr(KabutanProvider, "_find_table", lambda self, soup, heading, min_rows, max_rows: BeautifulSoup(html, "lxml").find("table"))
+    provider = KabutanProvider()
+    records = provider.get_quarterly("5032.T")
+    assert len(records) == 1

@@ -22,6 +22,12 @@ def test_annual_checks_basic_growth():
     assert results["no_big_drop"] is True
 
 
+def test_annual_checks_empty_dataframe():
+    df = pd.DataFrame(columns=["ordinary_income", "revenue"])
+    results = screener.annual_checks(df)
+    assert results == {"enough_years": False}
+
+
 def test_quarterly_checks_triggers_and_flags():
     base = pd.DataFrame(
         {
@@ -58,6 +64,12 @@ def test_quarterly_checks_triggers_and_flags():
     assert results["sequential_ok"] is True
     assert results["accelerating"] is True
     assert results["improving_margin"] is True
+
+
+def test_quarterly_checks_empty_dataframe():
+    df = pd.DataFrame(columns=["ordinary_income", "revenue"])
+    results = screener.quarterly_checks(df)
+    assert results == {"enough_quarters": False}
 
 
 def test_score_accumulates_hits_and_notes():
@@ -105,6 +117,13 @@ def test_score_accumulates_hits_and_notes():
     assert score == 7
     assert "年率5–10%の安定成長は未達" in notes
     assert "直近Q: 経常+20% & 売上+10% 未達" not in notes
+
+
+def test_score_handles_missing_sections():
+    score, notes = screener.score({"enough_years": False}, {"enough_quarters": False})
+    assert score == 0
+    assert "年次データ不足" in notes
+    assert "四半期データ不足" in notes
 
 
 def test_perc_handles_none_and_numbers():
