@@ -1,5 +1,6 @@
 name: screener-test
 
+# 手動でスクリーナー全体を検証するためのワークフロー（必要なときのみ実行）
 on:
   workflow_dispatch:
     inputs:
@@ -20,7 +21,6 @@ jobs:
   screener:
     runs-on: ubuntu-latest
     env:
-      PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
       THROTTLE_SECONDS: ${{ inputs.throttle_seconds || '13' }}
       MAX_SYMBOLS: ${{ inputs.max_symbols || '60' }}
     steps:

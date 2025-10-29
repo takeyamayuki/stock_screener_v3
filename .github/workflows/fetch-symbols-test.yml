@@ -1,5 +1,6 @@
 name: fetch-symbols-test
 
+# 手動で銘柄取得の挙動を確認するためのワークフロー（API負荷を避けるため自動実行なし）
 on:
   workflow_dispatch:
     inputs:
@@ -15,7 +16,6 @@ jobs:
   fetch-symbols:
     runs-on: ubuntu-latest
     env:
-      PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
       THROTTLE_SECONDS: ${{ inputs.throttle_seconds || '13' }}
       MAX_SYMBOLS: ${{ inputs.max_symbols || '80' }}
     steps:

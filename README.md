@@ -46,11 +46,15 @@
 - `daily-stock-screen`（`.github/workflows/screener.yml`）  
   - JST 08:30 に実行。株探のランキングからシンボル取得→スクリーナー→`reports/` の差分をコミット。
   - `MAX_SYMBOLS` や `THROTTLE_SECONDS` などの実行パラメータはジョブ内の環境変数で管理。
+- `run-tests`（`.github/workflows/tests.yml`）  
+  - `main` への push / Pull Request / 手動実行で `pytest` を自動実行し、ユニットテストを常時検証。
 - `weekly-highlights`（`.github/workflows/weekly-summary.yml`）  
   - 毎週土曜 00:30 JST（UTC 金曜 15:30）に週次ハイライトを生成し、差分があればコミット。
 - 手動検証用ワークフロー  
-  - `fetch-symbols-test`：`scripts/fetch_symbols_ppx.py` を単体実行し、生成した `config/symbols.txt` をアーティファクト化。
-  - `screener-test`：`scripts/screener.py` を実行し、`reports/screen_*.{csv,md}` をアーティファクト化（オプションで前段の fetch を実行）。
+  - `fetch-symbols-test`：`workflow_dispatch` のみで起動。`scripts/fetch_symbols_ppx.py` を単体実行し、生成した `config/symbols.txt` をアーティファクト化。  
+    株探側のレイアウト変更や取得件数の異常が疑われる際、パラメータ変更の効果を確認したい際などにスポットで利用。
+  - `screener-test`：`workflow_dispatch` のみで起動。必要に応じて前段の fetch を含めた `scripts/screener.py` の通し実行とレポート出力を確認。  
+    スクリーナー全体の動作を GitHub Actions 上で再現したいとき（依存パッケージ更新後の確認、環境差異の切り分け等）に利用。
 
 ## 調整可能なパラメータ
 
