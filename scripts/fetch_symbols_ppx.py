@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import sys
@@ -7,13 +6,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import requests
 from bs4 import BeautifulSoup
 
-try:  # pragma: no cover - support both package and script execution
-    from providers.kabutan import KabutanProvider
-except ImportError:  # pragma: no cover
-    from .providers.kabutan import KabutanProvider
-
 # --- 環境変数 ---
-PPX_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "200"))
 TARGET_PER_MARKET = int(os.environ.get("TARGET_PER_MARKET", "20"))
 
@@ -34,50 +27,10 @@ MARKET_ABBR_TO_NAME = {
     "東Ｇ": "グロース",
 }
 TARGET_MARKETS = tuple(MARKET_ABBR_TO_NAME.values())
-
-MARKET_PROMPTS: Dict[str, Iterable[str]] = {
-    "プライム": [
-        (
-            "あなたは日本の株式市場の速報データを参照できます。"
-            "本日（日本時間）52週高値を更新した東証プライム銘柄を、"
-            "4桁の証券コードのみで20件以上リストアップしてください。"
-            "ETF・ETN・REIT・投資法人は除外してください。"
-            "出力は **JSONのみ** で、形は {\"codes\": [\"1234\", ...]} とします。"
-        ),
-        (
-            "You can browse up-to-date Japanese market data. "
-            "List at least twenty TSE Prime stocks that made new 52-week highs today "
-            "(Japan time). Output only the four-digit stock codes in JSON: "
-            '{"codes": ["1234", "5678", ...]}. Exclude ETFs/ETNs/REITs.'
-        ),
-    ],
-    "スタンダード": [
-        (
-            "あなたは日本の株式市場の速報データを参照できます。"
-            "本日52週高値を更新した東証スタンダード銘柄を、"
-            "4桁コードだけで20件以上リストアップしてください。"
-            "ETF・ETN・REIT・投資法人は除外し、出力は {\"codes\": [...]} のJSONのみとします。"
-        ),
-        (
-            "You can browse up-to-date Japanese market data. "
-            "Provide at least twenty four-digit codes of TSE Standard stocks hitting "
-            "52-week highs today (Japan time). Output JSON only in the form "
-            '{"codes": [...]}. Exclude ETFs/ETNs/REITs.'
-        ),
-    ],
-    "グロース": [
-        (
-            "あなたは日本の株式市場の速報データを参照できます。"
-            "本日52週高値を更新した東証グロース銘柄を、"
-            "4桁コードのみで30件程度列挙してください。"
-            "ETF等は除外し、JSON (\"codes\": [...]) のみを返してください。"
-        ),
-        (
-            "You can browse up-to-date Japanese market data. "
-            "List around thirty TSE Growth stocks that set a 52-week high today. "
-            "Return JSON only in the format {\"codes\": [...]}. Exclude ETFs/ETNs/REITs."
-        ),
-    ],
+KABUTAN_MARKET_PARAMS = {
+    "プライム": {"market": "1"},
+    "スタンダード": {"market": "2"},
+    "グロース": {"market": "3"},
 }
 
 
@@ -85,52 +38,19 @@ def log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def perplexity_fetch_json(prompt: str, model: str) -> dict:
-    url = "https://api.perplexity.ai/chat/completions"
-    headers = {"Authorization": f"Bearer {PPX_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "return_citations": True,
-        "temperature": 0.0,
-    }
-    resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
-    resp.raise_for_status()
-    content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
-    try:
-        start = content.find("{")
-        end = content.rfind("}")
-        if start != -1 and end != -1:
-            return json.loads(content[start : end + 1])
-    except Exception:
-        pass
-    return {}
-
-
-def try_perplexity_codes_for_market(market: str) -> List[str]:
-    if not PPX_KEY:
-        return []
-    prompts = MARKET_PROMPTS.get(market, [])
-    for model in ("sonar-pro", "sonar"):
-        for prompt in prompts:
-            try:
-                js = perplexity_fetch_json(prompt, model)
-                codes = js.get("codes") if isinstance(js, dict) else None
-                if isinstance(codes, list):
-                    filtered = [c for c in codes if re.fullmatch(r"\d{4}", str(c))]
-                    if filtered:
-                        return filtered
-            except Exception as exc:
-                log(f"[fetch][ppx] {model}/{market} failed: {exc}")
-    return []
-
-
-def iter_kabutan_candidates(max_pages: int = 60) -> Iterable[Tuple[str, Optional[str]]]:
+def iter_kabutan_candidates(
+    market: str,
+    max_pages: int = 60,
+) -> Iterable[Tuple[str, Optional[str]]]:
+    base_params = KABUTAN_MARKET_PARAMS.get(market, {})
     for page in range(1, max_pages + 1):
         try:
+            params = dict(base_params)
+            if page > 1:
+                params["page"] = page
             resp = requests.get(
                 KABUTAN_URL,
-                params={"page": page},
+                params=params or {"page": page},
                 headers={"User-Agent": USER_AGENT},
                 timeout=30,
             )
@@ -155,24 +75,6 @@ def iter_kabutan_candidates(max_pages: int = 60) -> Iterable[Tuple[str, Optional
             yield code, MARKET_ABBR_TO_NAME.get(market_raw)
 
 
-KABUTAN_PROVIDER = KabutanProvider()
-INFO_CACHE: Dict[str, Optional[str]] = {}
-
-
-def lookup_market(code: str) -> Optional[str]:
-    cached = INFO_CACHE.get(code)
-    if cached is not None:
-        return cached
-    try:
-        info = KABUTAN_PROVIDER.get_company_info(f"{code}.T")
-        market = info.market if info else None
-    except Exception as exc:
-        log(f"[fetch][kabutan-info] {code} failed: {exc}")
-        market = None
-    INFO_CACHE[code] = market
-    return market
-
-
 def add_codes(
     collected: Dict[str, List[str]],
     codes_with_market: Iterable[Tuple[str, Optional[str]]],
@@ -188,21 +90,6 @@ def add_codes(
         bucket.append(code)
 
 
-def ensure_minimum_codes(collected: Dict[str, List[str]]) -> None:
-    for market in TARGET_MARKETS:
-        if len(collected[market]) >= TARGET_PER_MARKET:
-            continue
-        ppx_codes = try_perplexity_codes_for_market(market)
-        if not ppx_codes:
-            continue
-        verified = []
-        for code in ppx_codes:
-            mk = lookup_market(code)
-            if mk == market and code not in verified:
-                verified.append(code)
-        add_codes(collected, [(code, market) for code in verified])
-
-
 def flatten_symbols(collected: Dict[str, List[str]]) -> List[str]:
     ordered = []
     for market in TARGET_MARKETS:
@@ -213,8 +100,8 @@ def flatten_symbols(collected: Dict[str, List[str]]) -> List[str]:
 def main() -> None:
     collected: Dict[str, List[str]] = {market: [] for market in TARGET_MARKETS}
 
-    add_codes(collected, iter_kabutan_candidates(max_pages=60))
-    ensure_minimum_codes(collected)
+    for market in TARGET_MARKETS:
+        add_codes(collected, iter_kabutan_candidates(market=market, max_pages=60))
 
     totals = {market: len(codes) for market, codes in collected.items()}
     for market, count in totals.items():

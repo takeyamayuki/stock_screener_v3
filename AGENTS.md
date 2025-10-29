@@ -11,7 +11,7 @@
 ## Build, Test, and Development Commands
 - Install deps: `python -m pip install -U pip && pip install -r requirements.txt`
 - Fetch today’s symbols:
-  - `export PERPLEXITY_API_KEY=...` (optional), `export ALPHAVANTAGE_KEY=...`
+  - `export ALPHAVANTAGE_KEY=...`
   - `python scripts/fetch_symbols_ppx.py` → writes `config/symbols.txt`
 - Run screener locally:
   - `export THROTTLE_SECONDS=13 MAX_SYMBOLS=60 ALPHAVANTAGE_MAX_DAILY_CALLS=20`
@@ -36,9 +36,9 @@
 - Avoid committing secrets or large data; keep diffs minimal and focused.
 
 ## Security & Configuration Tips
-- Provide keys via env vars or GitHub Secrets: `PERPLEXITY_API_KEY`, `ALPHAVANTAGE_KEY`.
+- Provide keys via env vars or GitHub Secrets: `ALPHAVANTAGE_KEY`（必須）, `PERPLEXITY_API_KEY`（任意で要約に使用）。
 - Be mindful of vendor rate limits; default `THROTTLE_SECONDS` 13–15s is recommended.
 - Caches live under `cache/`; do not store credentials; safe to commit JSON caches already in repo.
 
 ## Architecture Overview
-- Pipeline: fetch 52‑week‑high JP codes → write `config/symbols.txt` → run screener (Alpha Vantage fundamentals + Perplexity digest) → output CSV/Markdown → CI commits artifacts.
+- Pipeline: 株探の52週高値ランキングをスクレイピング→`config/symbols.txt`に出力→スクリーナー実行（Alpha Vantage fundamentals + Perplexity digest）→CSV/Markdown出力→CIがコミット。

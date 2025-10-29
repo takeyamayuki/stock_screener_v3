@@ -1,6 +1,6 @@
 # JP 52-Week High Screener (No-Scrape)
 
-- Perplexity API と株探ランキングを組み合わせ、東証プライム/スタンダード/グロースの52週高値候補を収集（各市場20件を目標）
+- 株探「本日52週高値を更新」ランキングをスクレイピングし、東証プライム/スタンダード/グロースの候補を収集（各市場20件を目標）
 - Yahoo!ファイナンス日本版と株探の財務データを統合して独自スコアを算出
 - 日次スクリーン（CSV/Markdown）を `reports/` へ出力し、週次サマリーも自動生成
 
@@ -22,7 +22,6 @@
 1. シンボルリストの取得  
    ```bash
    export ALPHAVANTAGE_KEY=...
-   export PERPLEXITY_API_KEY=...   # 任意
    python scripts/fetch_symbols_ppx.py
    ```  
    `config/symbols.txt` が上書きされます。
@@ -45,7 +44,7 @@
 ## GitHub Actions ワークフロー
 
 - `daily-stock-screen`（`.github/workflows/screener.yml`）  
-  - JST 08:30 に実行。シンボル取得→スクリーナー→`reports/` の差分をコミット。
+  - JST 08:30 に実行。株探のランキングからシンボル取得→スクリーナー→`reports/` の差分をコミット。
   - `MAX_SYMBOLS` や `THROTTLE_SECONDS` などの実行パラメータはジョブ内の環境変数で管理。
 - `weekly-highlights`（`.github/workflows/weekly-summary.yml`）  
   - 毎週土曜 00:30 JST（UTC 金曜 15:30）に週次ハイライトを生成し、差分があればコミット。
@@ -64,7 +63,7 @@
 ## 注意点
 
 - 財務指標は Yahoo!ファイナンス／株探の公開値を利用し、ETF/REIT 等は市場区分でフィルタ。
-- 52週高値候補の一覧抽出は Perplexity を利用するためスクレイピングは不要。
+- 52週高値候補の一覧抽出は株探のランキングをスクレイピングして取得。
 - API レート制限に留意し、無料枠の場合は 13–15 秒のスロットルを維持することを推奨。
 
 ## テスト
@@ -83,7 +82,7 @@
    ```
 
 主なテスト範囲：
-- `tests/test_fetch_symbols.py`：Perplexity 由来のシンボル整形・重複排除
+- `tests/test_fetch_symbols.py`：株探ランキングのスクレイピング結果整形と重複排除
 - `tests/test_kabutan_provider.py` / `tests/test_yahoo_provider.py`：財務データプロバイダのパースとエラー処理
 - `tests/test_aggregator.py` / `tests/test_metrics.py`：スコアリング集計と補助指標計算
 - `tests/test_weekly_summary.py`：`generate_weekly_summary.py` のレポート統合と Markdown 出力
