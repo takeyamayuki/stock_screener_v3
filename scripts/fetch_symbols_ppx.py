@@ -68,11 +68,12 @@ def iter_kabutan_candidates(
             cells = tr.find_all("td")
             if not cells:
                 continue
-            code = cells[0].get_text(strip=True)
+            code = cells[0].get_text(strip=True).upper()
             market_raw = cells[1].get_text(strip=True) if len(cells) > 1 else ""
-            if not re.fullmatch(r"\d{4}", code):
+            if not re.fullmatch(r"\d{3}[0-9A-Z]", code):
                 continue
-            yield code, MARKET_ABBR_TO_NAME.get(market_raw)
+            normalized_market = MARKET_ABBR_TO_NAME.get(market_raw)
+            yield code, normalized_market or market
 
 
 def add_codes(

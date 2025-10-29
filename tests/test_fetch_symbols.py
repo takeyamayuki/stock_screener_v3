@@ -19,9 +19,11 @@ def test_iter_kabutan_candidates(monkeypatch):
     html_with_codes = '''<table class="stock_table"><tbody>
         {row1}
         {row2}
+        {row3}
     </tbody></table>'''.format(
         row1=make_html_row("1234", "東Ｐ"),
         row2=make_html_row("ABCD", "東Ｐ"),
+        row3=make_html_row("247a", "名Ｎ"),
     )
     responses = [DummyResponse(html_with_codes), DummyResponse(status=404)]
     params_seen = []
@@ -32,7 +34,7 @@ def test_iter_kabutan_candidates(monkeypatch):
 
     monkeypatch.setattr(fetch.requests, "get", fake_get)
     result = list(fetch.iter_kabutan_candidates("プライム", max_pages=2))
-    assert result == [("1234", "プライム")]
+    assert result == [("1234", "プライム"), ("247A", "プライム")]
     assert params_seen[0] == {"market": "1"}
 
 
