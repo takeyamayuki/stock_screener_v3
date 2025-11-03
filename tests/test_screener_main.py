@@ -24,7 +24,7 @@ class DummyProvider:
         ]
 
     def get_company_info(self, symbol: str):
-        return CompanyInfo(symbol, "テスト銘柄", "プライム", "東証Ｐ", "kabutan")
+        return CompanyInfo(symbol, "テスト銘柄", "プライム", "東証Ｐ", "kabutan", per=25.0)
 
 
 def test_perplexity_digest_success_and_failure(monkeypatch):
@@ -70,6 +70,7 @@ def test_main_generates_reports(tmp_path, monkeypatch):
     df = pd.read_csv(csv_path)
     assert df.loc[0, "name_jp"] == "テスト銘柄"
     assert df.loc[0, "score_0to7"] >= 4
+    assert df.loc[0, "official_score"] >= 1
     assert "テスト銘柄" in md_path.read_text(encoding="utf-8")
 
 

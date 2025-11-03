@@ -57,6 +57,8 @@ def annual_checks(df: pd.DataFrame) -> dict:
     yoy_series = window["ordinary_yoy"].dropna()
     stable_5_10 = all(0.05 <= x <= 0.10 for x in yoy_series) if len(yoy_series) >= 3 else False
     no_big_drop = all(x > -0.20 for x in yoy_series) if not yoy_series.empty else False
+    no_decline_small = all(x >= -0.05 for x in yoy_series) if not yoy_series.empty else False
+    avg_growth = float(yoy_series.mean()) if not yoy_series.empty else None
     last1 = yoy_series.iloc[0] if len(yoy_series) >= 1 else None
     if len(window) >= 3 and pd.notna(window["ordinary_income"].iloc[0]) and pd.notna(window["ordinary_income"].iloc[2]):
         last2_cagr = (
@@ -69,9 +71,12 @@ def annual_checks(df: pd.DataFrame) -> dict:
         "enough_years": len(df) >= 3,
         "stable_5_10": stable_5_10,
         "no_big_drop": no_big_drop,
+        "no_decline_small": no_decline_small,
+        "avg_growth": avg_growth,
         "last1_yoy": last1,
         "last2_cagr": last2_cagr,
         "annual_df": df,
+        "yoy_values": list(yoy_series),
     }
 
 
@@ -112,6 +117,8 @@ def quarterly_checks(df: pd.DataFrame) -> dict:
         "accelerating": bool(accelerating),
         "improving_margin": bool(improving_margin),
         "quarterly_df": df,
+        "recent_profit_yoy": [x if pd.notna(x) else None for x in last3["ordinary_yoy"].tolist()],
+        "recent_revenue_yoy": [x if pd.notna(x) else None for x in last3["revenue_yoy"].tolist()],
     }
 
 
@@ -160,6 +167,62 @@ def score(annual_result: dict, quarterly_result: dict) -> Tuple[int, str]:
     return s, "; ".join(notes)
 
 
+def _valid_floats(values: Iterable) -> list[float]:
+    """
+    Filter out None and NaN values from the input iterable and return a list of floats.
+    """
+    return [x for x in values if x is not None and not pd.isna(x)]
+
+
+def official_checks(
+    annual_result: dict, quarterly_result: dict, info: Optional[CompanyInfo]
+) -> dict:
+    yoy_values = _valid_floats(annual_result.get("yoy_values", []))
+    avg_growth = annual_result.get("avg_growth") if yoy_values else None
+    rule1_new_high = True  # 入力銘柄は新高値ランキング由来
+    rule3_growth = avg_growth is not None and avg_growth >= 0.07
+    rule3_no_decline = None
+    if yoy_values:
+        rule3_no_decline = all(x >= -0.05 for x in yoy_values)
+    last1_yoy = annual_result.get("last1_yoy")
+    last2_cagr = annual_result.get("last2_cagr")
+    rule4_recent20 = None
+    if last1_yoy is not None and last2_cagr is not None:
+        rule4_recent20 = last1_yoy >= 0.20 and last2_cagr >= 0.20
+    recent_revenue = _valid_floats(quarterly_result.get("recent_revenue_yoy", []))
+    recent_profit = _valid_floats(quarterly_result.get("recent_profit_yoy", []))
+    rule5_sales = None
+    if recent_revenue:
+        rule5_sales = sum(1 for x in recent_revenue if x >= 0.10) >= 2
+    rule6_profit = None
+    if recent_profit:
+        rule6_profit = sum(1 for x in recent_profit if x >= 0.20) >= 2
+    rule7_resilience = None
+    if recent_profit and yoy_values:
+        rule7_resilience = all(x >= 0 for x in recent_profit[:3]) and all(x >= -0.05 for x in yoy_values[:3])
+    per_ok = None
+    if info and info.per is not None and not pd.isna(info.per):
+        per_ok = info.per <= 60
+    metrics = {
+        "rule1_new_high": rule1_new_high,
+        "rule3_growth": rule3_growth if avg_growth is not None else None,
+        "rule3_no_decline": rule3_no_decline,
+        "rule4_recent20": rule4_recent20,
+        "rule5_sales": rule5_sales,
+        "rule6_profit": rule6_profit,
+        "rule7_resilience": rule7_resilience,
+        "rule8_per": per_ok,
+    }
+    applicable = sum(1 for value in metrics.values() if value is not None)
+    score = sum(1 for value in metrics.values() if value)
+    return {
+        "metrics": metrics,
+        "applicable": applicable,
+        "score": score,
+        "avg_growth": avg_growth,
+    }
+
+
 def perplexity_digest(symbol: str) -> str:
     if not PPX_KEY:
         return ""
@@ -192,6 +255,20 @@ def perc(value: float) -> str:
     if value is None or pd.isna(value):
         return ""
     return f"{value * 100:.1f}%"
+
+
+def ratio(value: Optional[float], *, unit: str = "x") -> str:
+    if value is None or pd.isna(value):
+        return ""
+    if unit:
+        return f"{value:.1f}{unit}"
+    return f"{value:.1f}"
+
+
+def checkmark(value: Optional[bool]) -> str:
+    if value is None:
+        return "？"
+    return "✅" if value else "—"
 
 
 def fetch_financials(provider: FinancialDataProvider, symbol: str) -> Tuple[list, list]:
@@ -238,41 +315,90 @@ def compose_markdown(
         "- `銘柄名`: Kabutanより取得した日本語正式名。",
         "- `市場`: 東証の市場区分（プライム/スタンダード/グロースなど）。",
         "- `Score`: 年次・四半期チェックの合計スコア（0〜7）。",
+        "- `公式Score`: 株の公式ルールの達成数（適用可能な項目のみカウント）。",
+        "- `PER`: Kabutanの現在PER（数値がない場合は空欄）。",
         "- `直近1Y YoY`: 直近通期の経常利益YoY（前年比）。",
         "- `直近2Y CAGR`: 直近2期の経常利益CAGR。",
         "- `Q(pretax YoY)`: 直近四半期の経常利益YoY。",
         "- `Q(rev YoY)`: 直近四半期の売上高YoY。",
-        "- `Q基準達成`: 直近四半期で「経常+20% & 売上+10%」を満たしたか。",
-        "- `連続性`: 直近2-3四半期で基準を複数回満たしたか。",
-        "- `加速`: 経常YoYが直近で加速しているか。",
-        "- `率改善`: 経常利益率が前年同期比で改善しているか。",
         "- `メモ`: 未達項目や注意点のまとめ。",
+        "- `新高値`: 株の公式 1。52週高値リスト由来か（原則✅）。",
+        "- `年平均+7%`: 株の公式 3-1。過去の年平均成長率が7%以上か。",
+        "- `減益なし`: 株の公式 3-2。過去5〜10年で大きな減益がないか。",
+        "- `直近2Y+20%`: 株の公式 4。直近2期の経常CAGR/YoYが20%以上か。",
+        "- `売上10%`: 株の公式 5。直近四半期で売上YoY+10%を複数回達成したか。",
+        "- `利益20%`: 株の公式 6。直近四半期で経常YoY+20%を複数回達成したか。",
+        "- `揺るぎない`: 株の公式 7。逆風下でも成長を維持しているか（減益なし & 直近Qでマイナスなし）。",
+        "- `PER<=60`: 株の公式 8。株価収益率が足切り（60倍）以下か。",
+        "- `業績安定`: 新高値ブレイク術 1。年次成長が5〜10%で安定しているか。",
+        "- `大幅減益なし`: 新高値ブレイク術 1。途中で大幅減益がないか。",
+        "- `直近1Y+20%`: 新高値ブレイク術 2。直近1年の経常利益が20%以上伸びたか。",
+        "- `直近2Y+20%`: 新高値ブレイク術 2。直近2年のCAGRが20%以上か。",
+        "- `直近Q基準`: 新高値ブレイク術 3。直近四半期で経常+20% & 売上+10%を満たしたか。",
+        "- `連続クリア`: 新高値ブレイク術 3。直近2〜3四半期で基準を複数回達成したか。",
+        "- `成長加速`: 新高値ブレイク術 3。経常YoYが加速しているか。",
+        "- `利益率改善`: 新高値ブレイク術 4。経常利益率が前年同期比で改善しているか。",
+        "※ `？` はデータ不足等で自動判定できない項目を示します。",
     ]
 
     digest_lines: List[str] = []
     if not df.empty:
-        table_lines = [
-            "|Symbol|銘柄名|市場|Score|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
-            "|---|---|---|---:|---:|---:|---:|---:|:---:|:---:|:---:|:---:|---|",
+        summary_table_lines = [
+            "|Symbol|銘柄名|市場|Score|公式Score|PER|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|メモ|",
+            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        ]
+        official_table_lines = [
+            "|Symbol|新高値|年平均+7%|減益なし|直近2Y+20%|売上10%|利益20%|揺るぎない|PER<=60|",
+            "|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
+        ]
+        breakout_table_lines = [
+            "|Symbol|業績安定|大幅減益なし|直近1Y+20%|直近2Y+20%|直近Q基準|連続クリア|成長加速|利益率改善|",
+            "|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
         ]
         for record in df.to_dict("records"):
-            table_lines.append(
+            official_score_display = ""
+            applicable = record.get("official_applicable")
+            if applicable:
+                official_score_display = f"{record.get('official_score', 0)}/{applicable}"
+            summary_table_lines.append(
                 f"|{record['symbol']}|{record.get('name_jp', '')}|{record.get('market', '')}|"
                 f"{record.get('score_0to7', '')}|"
+                f"{official_score_display}|"
+                f"{ratio(record.get('per'), unit='')}|"
                 f"{perc(record.get('annual_last1_yoy'))}|"
                 f"{perc(record.get('annual_last2_cagr'))}|"
                 f"{perc(record.get('q_last_pretax_yoy'))}|"
                 f"{perc(record.get('q_last_revenue_yoy'))}|"
+                f"{record.get('notes', '')}|"
+            )
+            official_table_lines.append(
+                f"|{record['symbol']}|"
+                f"{checkmark(record.get('official_rule1_new_high'))}|"
+                f"{checkmark(record.get('official_rule3_growth'))}|"
+                f"{checkmark(record.get('official_rule3_no_decline'))}|"
+                f"{checkmark(record.get('official_rule4_recent20'))}|"
+                f"{checkmark(record.get('official_rule5_sales'))}|"
+                f"{checkmark(record.get('official_rule6_profit'))}|"
+                f"{checkmark(record.get('official_rule7_resilience'))}|"
+                f"{checkmark(record.get('official_rule8_per'))}|"
+            )
+            breakout_table_lines.append(
+                f"|{record['symbol']}|"
+                f"{checkmark(record.get('nh_stable_growth'))}|"
+                f"{checkmark(record.get('nh_no_big_drop'))}|"
+                f"{checkmark(record.get('nh_last1_20'))}|"
+                f"{checkmark(record.get('nh_last2_20'))}|"
                 f"{'✅' if record.get('q_last_ok_20_10') else '—'}|"
                 f"{'✅' if record.get('q_seq_ok') else '—'}|"
                 f"{'✅' if record.get('q_accelerating') else '—'}|"
                 f"{'✅' if record.get('q_improving_margin') else '—'}|"
-                f"{record.get('notes', '')}|"
             )
             if record.get("digest"):
                 digest_lines.append(f"**{record['symbol']} 要約**\n\n{record['digest']}\n")
     else:
-        table_lines = ["> 表示可能なデータがありませんでした。"]
+        summary_table_lines = ["> 表示可能なデータがありませんでした。"]
+        official_table_lines = []
+        breakout_table_lines = []
 
     notes_lines: List[str] = []
     errors = list(errors)
@@ -283,7 +409,17 @@ def compose_markdown(
         if len(errors) > 50:
             notes_lines.append(f"- …ほか {len(errors) - 50} 件")
 
-    sections: List[str] = summary_lines + ["\n### 指標の見方\n"] + column_guides + ["\n"] + table_lines
+    sections: List[str] = (
+        summary_lines
+        + ["\n### 指標の見方\n"]
+        + column_guides
+        + ["\n### サマリー\n"]
+        + summary_table_lines
+    )
+    if official_table_lines:
+        sections += ["\n### 株の公式の基準（買い）\n"] + official_table_lines
+    if breakout_table_lines:
+        sections += ["\n### 新高値ブレイク投資術の基準（買い）\n"] + breakout_table_lines
     if digest_lines:
         sections += ["\n"] + digest_lines
     sections += ["\n"] + notes_lines
@@ -318,6 +454,25 @@ def main():
             quarterly_result = quarterly_checks(quarterly_df)
 
             sc, notes = score(annual_result, quarterly_result)
+            info = fetch_company_info(provider, symbol)
+            official_result = official_checks(annual_result, quarterly_result, info)
+            official_metrics = official_result["metrics"]
+
+            note_parts = [part for part in notes.split("; ") if part]
+            official_note_map = {
+                "rule3_growth": "年平均成長+7%未達",
+                "rule3_no_decline": "過去に減益あり",
+                "rule4_recent20": "直近2年+20%未達",
+                "rule5_sales": "売上YoY+10%不足",
+                "rule6_profit": "経常YoY+20%不足",
+                "rule7_resilience": "揺るぎない成長要件未満",
+                "rule8_per": "PER>60",
+            }
+            for key, message in official_note_map.items():
+                value = official_metrics.get(key)
+                if value is False:
+                    note_parts.append(message)
+            notes = "; ".join(note_parts)
 
             last1 = annual_result.get("last1_yoy")
             last2 = annual_result.get("last2_cagr")
@@ -328,14 +483,38 @@ def main():
             )
             lastQ_pre_yoy = None if lastQ is None else lastQ.get("ordinary_yoy")
             lastQ_rev_yoy = None if lastQ is None else lastQ.get("revenue_yoy")
+            stable_flag = annual_result.get("stable_5_10")
+            no_big_drop_flag = annual_result.get("no_big_drop")
+            if not annual_result.get("enough_years"):
+                stable_flag = None
+                no_big_drop_flag = None
+            last1_flag = None
+            if last1 is not None and not pd.isna(last1):
+                last1_flag = last1 >= 0.20
+            last2_flag = None
+            if last2 is not None and not pd.isna(last2):
+                last2_flag = last2 >= 0.20
 
-            info = fetch_company_info(provider, symbol)
             rows.append(
                 {
                     "symbol": symbol,
                     "name_jp": info.name if info else "",
                     "market": info.market if info else "",
                     "score_0to7": sc,
+                    "official_score": official_result.get("score"),
+                    "official_applicable": official_result.get("applicable"),
+                    "official_rule1_new_high": official_metrics.get("rule1_new_high"),
+                    "official_rule3_growth": official_metrics.get("rule3_growth"),
+                    "official_rule3_no_decline": official_metrics.get("rule3_no_decline"),
+                    "official_rule4_recent20": official_metrics.get("rule4_recent20"),
+                    "official_rule5_sales": official_metrics.get("rule5_sales"),
+                    "official_rule6_profit": official_metrics.get("rule6_profit"),
+                    "official_rule7_resilience": official_metrics.get("rule7_resilience"),
+                    "official_rule8_per": official_metrics.get("rule8_per"),
+                    "nh_stable_growth": stable_flag,
+                    "nh_no_big_drop": no_big_drop_flag,
+                    "nh_last1_20": last1_flag,
+                    "nh_last2_20": last2_flag,
                     "annual_last1_yoy": last1,
                     "annual_last2_cagr": last2,
                     "q_last_pretax_yoy": lastQ_pre_yoy,
@@ -345,6 +524,7 @@ def main():
                     "q_accelerating": quarterly_result.get("accelerating"),
                     "q_improving_margin": quarterly_result.get("improving_margin"),
                     "notes": notes,
+                    "per": info.per if info else None,
                     "digest": perplexity_digest(symbol) if sc >= 3 else "",
                 }
             )

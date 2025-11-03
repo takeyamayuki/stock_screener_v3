@@ -43,3 +43,8 @@ class CompanyInfo:
     market: Optional[str]
     market_label: Optional[str]
     source: str
+    per: Optional[float] = None
+    pbr: Optional[float] = None
+    dividend_yield: Optional[float] = None
+    credit_ratio: Optional[float] = None
+    market_cap: Optional[float] = None

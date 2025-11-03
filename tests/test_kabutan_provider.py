@@ -61,6 +61,11 @@ def test_kabutan_get_company_info(monkeypatch, company_html):
     assert info.name == "ＡＮＹＣＯＬＯＲ"
     assert info.market == "プライム"
     assert info.market_label == "東証Ｐ"
+    assert info.per == pytest.approx(26.3)
+    assert info.pbr == pytest.approx(15.4)
+    assert info.dividend_yield == pytest.approx(0.0112)
+    assert info.credit_ratio == pytest.approx(2.45)
+    assert info.market_cap == pytest.approx(382900000000.0)
 
 
 def test_fetch_dom_uses_session(monkeypatch):

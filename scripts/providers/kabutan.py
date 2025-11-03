@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 
 from .models import AnnualRecord, CompanyInfo, QuarterlyRecord
 from .utils import (
+    UNIT_MULTIPLIERS,
     last_day_of_month,
     parse_quarter_range,
     parse_unit_from_info,
@@ -74,6 +75,52 @@ class KabutanProvider:
         info_text = " ".join(li.get_text(strip=True) for li in info_block.find_all("li"))
         return parse_unit_from_info(info_text, default="百万円")
 
+    @staticmethod
+    def _clean_numeric(value: str) -> str:
+        return value.replace(",", "").replace("％", "%").replace("倍", "").strip()
+
+    @staticmethod
+    def _parse_ratio(value: str, *, percent: bool = False) -> Optional[float]:
+        value = value.strip()
+        if not value or value in {"-", "—", "－"}:
+            return None
+        normalized = KabutanProvider._clean_numeric(value)
+        if percent or value.endswith("%"):
+            try:
+                return float(normalized.rstrip("%")) / 100
+            except ValueError:
+                return None
+        try:
+            return float(normalized)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_market_cap(value: str) -> Optional[float]:
+        value = value.strip()
+        if not value or value in {"-", "—", "－"}:
+            return None
+        normalized = value.replace(",", "")
+        for unit_label, multiplier in UNIT_MULTIPLIERS.items():
+            if unit_label == "円":
+                continue
+            if normalized.endswith(unit_label):
+                number_part = normalized[: -len(unit_label)].strip()
+                try:
+                    return float(number_part) * multiplier
+                except ValueError:
+                    return None
+        if normalized.endswith("円"):
+            number_part = normalized[:-1].strip()
+            try:
+                return float(number_part)
+            except ValueError:
+                return None
+        try:
+            return float(normalized)
+        except ValueError:
+            return None
+
     def get_annual(self, symbol: str) -> List[AnnualRecord]:
         soup = self._fetch_dom(symbol)
         table = self._find_table(soup, heading="業績推移", min_rows=6, max_rows=10)
@@ -136,12 +183,36 @@ class KabutanProvider:
             return None
         raw_market = market_node.get_text(strip=True) if market_node else None
         mapped_market = self.MARKET_MAP.get(raw_market, raw_market)
+        per = pbr = dividend_yield = credit_ratio = market_cap = None
+
+        per_header = soup.find("abbr", attrs={"title": "Price Earnings Ratio"})
+        if per_header:
+            ratio_table = per_header.find_parent("table")
+            if ratio_table:
+                body = ratio_table.find("tbody")
+                rows = body.find_all("tr") if body else []
+                if rows:
+                    cells = rows[0].find_all("td")
+                    if len(cells) >= 4:
+                        per = self._parse_ratio(cells[0].get_text(strip=True))
+                        pbr = self._parse_ratio(cells[1].get_text(strip=True))
+                        dividend_yield = self._parse_ratio(cells[2].get_text(strip=True), percent=True)
+                        credit_ratio = self._parse_ratio(cells[3].get_text(strip=True))
+                if len(rows) >= 2:
+                    cap_cells = rows[1].find_all("td")
+                    if cap_cells:
+                        market_cap = self._parse_market_cap(cap_cells[0].get_text(strip=True))
         return CompanyInfo(
             symbol=symbol,
             name=name_node.get_text(strip=True) if name_node else None,
             market=mapped_market,
             market_label=raw_market,
             source="kabutan",
+            per=per,
+            pbr=pbr,
+            dividend_yield=dividend_yield,
+            credit_ratio=credit_ratio,
+            market_cap=market_cap,
         )
 
     def get_quarterly(self, symbol: str) -> List[QuarterlyRecord]:
