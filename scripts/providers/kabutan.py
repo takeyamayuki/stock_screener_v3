@@ -91,7 +91,7 @@ class KabutanProvider:
             except ValueError:
                 return None
         try:
-            return float(normalized.rstrip("%"))
+            return float(normalized)
         except ValueError:
             return None
 
