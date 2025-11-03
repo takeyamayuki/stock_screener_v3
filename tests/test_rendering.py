@@ -21,6 +21,10 @@ def test_compose_markdown_includes_table_and_digest():
                 "official_rule6_profit": True,
                 "official_rule7_resilience": True,
                 "official_rule8_per": True,
+                "nh_stable_growth": True,
+                "nh_no_big_drop": True,
+                "nh_last1_20": True,
+                "nh_last2_20": True,
                 "annual_last1_yoy": 0.25,
                 "annual_last2_cagr": 0.22,
                 "q_last_pretax_yoy": 0.3,
@@ -38,7 +42,9 @@ def test_compose_markdown_includes_table_and_digest():
 
     markdown = screener.compose_markdown(df, errors=[], num_input_symbols=1)
 
-    assert "|Symbol|銘柄名|市場|Score|公式Score|" in markdown
+    assert "### 株の公式の基準（買い）" in markdown
+    assert "### 新高値ブレイク投資術の基準（買い）" in markdown
+    assert "|Symbol|銘柄名|市場|Score|公式Score|PER|" in markdown
     assert "|1234.T|テスト株式会社|プライム|5|" in markdown
     assert "**1234.T 要約**" in markdown
     assert "サンプル要約" in markdown

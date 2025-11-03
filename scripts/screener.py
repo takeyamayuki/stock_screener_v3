@@ -313,42 +313,63 @@ def compose_markdown(
         "- `市場`: 東証の市場区分（プライム/スタンダード/グロースなど）。",
         "- `Score`: 年次・四半期チェックの合計スコア（0〜7）。",
         "- `公式Score`: 株の公式ルールの達成数（適用可能な項目のみカウント）。",
-        "- `新高値`: 52週高値リスト由来か（原則✅）。",
-        "- `年平均+7%`: 過去の年平均成長率が7%以上か。",
-        "- `減益なし`: 過去5〜10年で大きな減益がないか。",
-        "- `直近2Y+20%`: 直近2期の経常CAGR/YoYが20%以上か。",
-        "- `売上10%`: 直近四半期で売上YoY+10%を複数回達成したか。",
-        "- `利益20%`: 直近四半期で経常YoY+20%を複数回達成したか。",
-        "- `揺るぎない`: 逆風下でも成長を維持しているか（減益なし & 直近Qでマイナスなし）。",
-        "- `PER<=60`: 株価収益率が足切り（60倍）以下か。",
         "- `PER`: Kabutanの現在PER（数値がない場合は空欄）。",
         "- `直近1Y YoY`: 直近通期の経常利益YoY（前年比）。",
         "- `直近2Y CAGR`: 直近2期の経常利益CAGR。",
         "- `Q(pretax YoY)`: 直近四半期の経常利益YoY。",
         "- `Q(rev YoY)`: 直近四半期の売上高YoY。",
-        "- `Q基準達成`: 直近四半期で「経常+20% & 売上+10%」を満たしたか。",
-        "- `連続性`: 直近2-3四半期で基準を複数回満たしたか。",
-        "- `加速`: 経常YoYが直近で加速しているか。",
-        "- `率改善`: 経常利益率が前年同期比で改善しているか。",
         "- `メモ`: 未達項目や注意点のまとめ。",
+        "- `新高値`: 株の公式 1。52週高値リスト由来か（原則✅）。",
+        "- `年平均+7%`: 株の公式 3-1。過去の年平均成長率が7%以上か。",
+        "- `減益なし`: 株の公式 3-2。過去5〜10年で大きな減益がないか。",
+        "- `直近2Y+20%`: 株の公式 4。直近2期の経常CAGR/YoYが20%以上か。",
+        "- `売上10%`: 株の公式 5。直近四半期で売上YoY+10%を複数回達成したか。",
+        "- `利益20%`: 株の公式 6。直近四半期で経常YoY+20%を複数回達成したか。",
+        "- `揺るぎない`: 株の公式 7。逆風下でも成長を維持しているか（減益なし & 直近Qでマイナスなし）。",
+        "- `PER<=60`: 株の公式 8。株価収益率が足切り（60倍）以下か。",
+        "- `業績安定`: 新高値ブレイク術 1。年次成長が5〜10%で安定しているか。",
+        "- `大幅減益なし`: 新高値ブレイク術 1。途中で大幅減益がないか。",
+        "- `直近1Y+20%`: 新高値ブレイク術 2。直近1年の経常利益が20%以上伸びたか。",
+        "- `直近2Y+20%`: 新高値ブレイク術 2。直近2年のCAGRが20%以上か。",
+        "- `直近Q基準`: 新高値ブレイク術 3。直近四半期で経常+20% & 売上+10%を満たしたか。",
+        "- `連続クリア`: 新高値ブレイク術 3。直近2〜3四半期で基準を複数回達成したか。",
+        "- `成長加速`: 新高値ブレイク術 3。経常YoYが加速しているか。",
+        "- `利益率改善`: 新高値ブレイク術 4。経常利益率が前年同期比で改善しているか。",
         "※ `？` はデータ不足等で自動判定できない項目を示します。",
     ]
 
     digest_lines: List[str] = []
     if not df.empty:
-        table_lines = [
-            "|Symbol|銘柄名|市場|Score|公式Score|新高値|年平均+7%|減益なし|直近2Y+20%|売上10%|利益20%|揺るぎない|PER<=60|PER|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|Q基準達成|連続性|加速|率改善|メモ|",
-            "|---|---|---|---:|---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---:|---:|---:|---:|:---:|:---:|:---:|:---:|---|",
+        summary_table_lines = [
+            "|Symbol|銘柄名|市場|Score|公式Score|PER|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|メモ|",
+            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        ]
+        official_table_lines = [
+            "|Symbol|新高値|年平均+7%|減益なし|直近2Y+20%|売上10%|利益20%|揺るぎない|PER<=60|",
+            "|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
+        ]
+        breakout_table_lines = [
+            "|Symbol|業績安定|大幅減益なし|直近1Y+20%|直近2Y+20%|直近Q基準|連続クリア|成長加速|利益率改善|",
+            "|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
         ]
         for record in df.to_dict("records"):
             official_score_display = ""
             applicable = record.get("official_applicable")
             if applicable:
                 official_score_display = f"{record.get('official_score', 0)}/{applicable}"
-            table_lines.append(
+            summary_table_lines.append(
                 f"|{record['symbol']}|{record.get('name_jp', '')}|{record.get('market', '')}|"
                 f"{record.get('score_0to7', '')}|"
                 f"{official_score_display}|"
+                f"{ratio(record.get('per'))}|"
+                f"{perc(record.get('annual_last1_yoy'))}|"
+                f"{perc(record.get('annual_last2_cagr'))}|"
+                f"{perc(record.get('q_last_pretax_yoy'))}|"
+                f"{perc(record.get('q_last_revenue_yoy'))}|"
+                f"{record.get('notes', '')}|"
+            )
+            official_table_lines.append(
+                f"|{record['symbol']}|"
                 f"{checkmark(record.get('official_rule1_new_high'))}|"
                 f"{checkmark(record.get('official_rule3_growth'))}|"
                 f"{checkmark(record.get('official_rule3_no_decline'))}|"
@@ -357,21 +378,24 @@ def compose_markdown(
                 f"{checkmark(record.get('official_rule6_profit'))}|"
                 f"{checkmark(record.get('official_rule7_resilience'))}|"
                 f"{checkmark(record.get('official_rule8_per'))}|"
-                f"{ratio(record.get('per'))}|"
-                f"{perc(record.get('annual_last1_yoy'))}|"
-                f"{perc(record.get('annual_last2_cagr'))}|"
-                f"{perc(record.get('q_last_pretax_yoy'))}|"
-                f"{perc(record.get('q_last_revenue_yoy'))}|"
+            )
+            breakout_table_lines.append(
+                f"|{record['symbol']}|"
+                f"{checkmark(record.get('nh_stable_growth'))}|"
+                f"{checkmark(record.get('nh_no_big_drop'))}|"
+                f"{checkmark(record.get('nh_last1_20'))}|"
+                f"{checkmark(record.get('nh_last2_20'))}|"
                 f"{'✅' if record.get('q_last_ok_20_10') else '—'}|"
                 f"{'✅' if record.get('q_seq_ok') else '—'}|"
                 f"{'✅' if record.get('q_accelerating') else '—'}|"
                 f"{'✅' if record.get('q_improving_margin') else '—'}|"
-                f"{record.get('notes', '')}|"
             )
             if record.get("digest"):
                 digest_lines.append(f"**{record['symbol']} 要約**\n\n{record['digest']}\n")
     else:
-        table_lines = ["> 表示可能なデータがありませんでした。"]
+        summary_table_lines = ["> 表示可能なデータがありませんでした。"]
+        official_table_lines = []
+        breakout_table_lines = []
 
     notes_lines: List[str] = []
     errors = list(errors)
@@ -382,7 +406,17 @@ def compose_markdown(
         if len(errors) > 50:
             notes_lines.append(f"- …ほか {len(errors) - 50} 件")
 
-    sections: List[str] = summary_lines + ["\n### 指標の見方\n"] + column_guides + ["\n"] + table_lines
+    sections: List[str] = (
+        summary_lines
+        + ["\n### 指標の見方\n"]
+        + column_guides
+        + ["\n### サマリー\n"]
+        + summary_table_lines
+    )
+    if official_table_lines:
+        sections += ["\n### 株の公式の基準（買い）\n"] + official_table_lines
+    if breakout_table_lines:
+        sections += ["\n### 新高値ブレイク投資術の基準（買い）\n"] + breakout_table_lines
     if digest_lines:
         sections += ["\n"] + digest_lines
     sections += ["\n"] + notes_lines
@@ -446,6 +480,18 @@ def main():
             )
             lastQ_pre_yoy = None if lastQ is None else lastQ.get("ordinary_yoy")
             lastQ_rev_yoy = None if lastQ is None else lastQ.get("revenue_yoy")
+            stable_flag = annual_result.get("stable_5_10")
+            no_big_drop_flag = annual_result.get("no_big_drop")
+            if not annual_result.get("enough_years"):
+                stable_flag = None
+                no_big_drop_flag = None
+            last1_flag = None
+            if last1 is not None and not pd.isna(last1):
+                last1_flag = last1 >= 0.20
+            last2_flag = None
+            if last2 is not None and not pd.isna(last2):
+                last2_flag = last2 >= 0.20
+
             rows.append(
                 {
                     "symbol": symbol,
@@ -462,6 +508,10 @@ def main():
                     "official_rule6_profit": official_metrics.get("rule6_profit"),
                     "official_rule7_resilience": official_metrics.get("rule7_resilience"),
                     "official_rule8_per": official_metrics.get("rule8_per"),
+                    "nh_stable_growth": stable_flag,
+                    "nh_no_big_drop": no_big_drop_flag,
+                    "nh_last1_20": last1_flag,
+                    "nh_last2_20": last2_flag,
                     "annual_last1_yoy": last1,
                     "annual_last2_cagr": last2,
                     "q_last_pretax_yoy": lastQ_pre_yoy,
