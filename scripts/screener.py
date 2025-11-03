@@ -167,7 +167,10 @@ def score(annual_result: dict, quarterly_result: dict) -> Tuple[int, str]:
     return s, "; ".join(notes)
 
 
-def _valid_floats(values):
+def _valid_floats(values: Iterable) -> list[float]:
+    """
+    Filter out None and NaN values from the input iterable and return a list of floats.
+    """
     return [x for x in values if x is not None and not pd.isna(x)]
 
 
