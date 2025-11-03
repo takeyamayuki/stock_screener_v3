@@ -260,8 +260,8 @@ def perc(value: float) -> str:
 def ratio(value: Optional[float], *, unit: str = "x") -> str:
     if value is None or pd.isna(value):
         return ""
-    if unit == "x":
-        return f"{value:.1f}x"
+    if unit:
+        return f"{value:.1f}{unit}"
     return f"{value:.1f}"
 
 
