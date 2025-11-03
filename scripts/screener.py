@@ -23,6 +23,10 @@ SYMBOL_DELAY_SECONDS = float(os.environ.get("SYMBOL_DELAY_SECONDS", "0"))
 JST = tz.gettz("Asia/Tokyo")
 TODAY = datetime.now(JST).strftime("%Y%m%d")
 
+# Rule 7 resilience thresholds
+RULE7_MIN_PROFIT_GROWTH = 0
+RULE7_MAX_DECLINE = -0.05
+
 SYMBOLS_PATH = "config/symbols.txt"
 REPORT_CSV = f"reports/screen_{TODAY}.csv"
 REPORT_MD = f"reports/screen_{TODAY}.md"
@@ -199,7 +203,7 @@ def official_checks(
         rule6_profit = sum(1 for x in recent_profit if x >= 0.20) >= 2
     rule7_resilience = None
     if recent_profit and yoy_values:
-        rule7_resilience = all(x >= 0 for x in recent_profit[:3]) and all(x >= -0.05 for x in yoy_values[:3])
+        rule7_resilience = all(x >= RULE7_MIN_PROFIT_GROWTH for x in recent_profit[:3]) and all(x >= RULE7_MAX_DECLINE for x in yoy_values[:3])
     per_ok = None
     if info and info.per is not None and not pd.isna(info.per):
         per_ok = info.per <= 60
