@@ -364,7 +364,7 @@ def compose_markdown(
                 f"|{record['symbol']}|{record.get('name_jp', '')}|{record.get('market', '')}|"
                 f"{record.get('score_0to7', '')}|"
                 f"{official_score_display}|"
-                f"{ratio(record.get('per'))}|"
+                f"{ratio(record.get('per'), unit='')}|"
                 f"{perc(record.get('annual_last1_yoy'))}|"
                 f"{perc(record.get('annual_last2_cagr'))}|"
                 f"{perc(record.get('q_last_pretax_yoy'))}|"
