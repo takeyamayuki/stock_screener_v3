@@ -343,17 +343,67 @@ def compose_markdown(
 
     digest_lines: List[str] = []
     if not df.empty:
+        header_columns = [
+            "Symbol",
+            "銘柄名",
+            "市場",
+            "Score",
+            "公式Score",
+            "PER",
+            "直近1Y YoY",
+            "直近2Y CAGR",
+            "Q(pretax YoY)",
+            "Q(rev YoY)",
+            "メモ",
+            "新高値",
+            "年平均+7%",
+            "減益なし",
+            "直近2Y+20%",
+            "売上10%",
+            "利益20%",
+            "揺るぎない",
+            "PER<=60",
+            "業績安定",
+            "大幅減益なし",
+            "直近1Y+20%",
+            "直近2Y+20%",
+            "直近Q基準",
+            "連続クリア",
+            "成長加速",
+            "利益率改善",
+        ]
+        alignment = [
+            "---",
+            "---",
+            "---",
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+            "---",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+            ":---:",
+        ]
         summary_table_lines = [
-            "|Symbol|銘柄名|市場|Score|公式Score|PER|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|メモ|",
-            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
-        ]
-        official_table_lines = [
-            "|Symbol|新高値|年平均+7%|減益なし|直近2Y+20%|売上10%|利益20%|揺るぎない|PER<=60|",
-            "|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
-        ]
-        breakout_table_lines = [
-            "|Symbol|業績安定|大幅減益なし|直近1Y+20%|直近2Y+20%|直近Q基準|連続クリア|成長加速|利益率改善|",
-            "|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
+            "|" + "|".join(header_columns) + "|",
+            "|" + "|".join(alignment) + "|",
         ]
         for record in df.to_dict("records"):
             official_score_display = ""
@@ -370,9 +420,6 @@ def compose_markdown(
                 f"{perc(record.get('q_last_pretax_yoy'))}|"
                 f"{perc(record.get('q_last_revenue_yoy'))}|"
                 f"{record.get('notes', '')}|"
-            )
-            official_table_lines.append(
-                f"|{record['symbol']}|"
                 f"{checkmark(record.get('official_rule1_new_high'))}|"
                 f"{checkmark(record.get('official_rule3_growth'))}|"
                 f"{checkmark(record.get('official_rule3_no_decline'))}|"
@@ -381,9 +428,6 @@ def compose_markdown(
                 f"{checkmark(record.get('official_rule6_profit'))}|"
                 f"{checkmark(record.get('official_rule7_resilience'))}|"
                 f"{checkmark(record.get('official_rule8_per'))}|"
-            )
-            breakout_table_lines.append(
-                f"|{record['symbol']}|"
                 f"{checkmark(record.get('nh_stable_growth'))}|"
                 f"{checkmark(record.get('nh_no_big_drop'))}|"
                 f"{checkmark(record.get('nh_last1_20'))}|"
@@ -397,8 +441,6 @@ def compose_markdown(
                 digest_lines.append(f"**{record['symbol']} 要約**\n\n{record['digest']}\n")
     else:
         summary_table_lines = ["> 表示可能なデータがありませんでした。"]
-        official_table_lines = []
-        breakout_table_lines = []
 
     notes_lines: List[str] = []
     errors = list(errors)
@@ -416,10 +458,6 @@ def compose_markdown(
         + ["\n### サマリー\n"]
         + summary_table_lines
     )
-    if official_table_lines:
-        sections += ["\n### 株の公式の基準（買い）\n"] + official_table_lines
-    if breakout_table_lines:
-        sections += ["\n### 新高値ブレイク投資術の基準（買い）\n"] + breakout_table_lines
     if digest_lines:
         sections += ["\n"] + digest_lines
     sections += ["\n"] + notes_lines
