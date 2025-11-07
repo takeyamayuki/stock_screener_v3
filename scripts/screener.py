@@ -343,6 +343,14 @@ def compose_markdown(
 
     digest_lines: List[str] = []
     if not df.empty:
+        official_section_lines = [
+            "\n### 株の公式の基準（買い）\n",
+            "統合テーブル内の `新高値` 〜 `PER<=60` 列のチェックマークを参照してください。\n",
+        ]
+        breakout_section_lines = [
+            "\n### 新高値ブレイク投資術の基準（買い）\n",
+            "統合テーブル内の `業績安定` 〜 `利益率改善` 列のチェックマークを参照してください。\n",
+        ]
         header_columns = [
             "Symbol",
             "銘柄名",
@@ -441,6 +449,8 @@ def compose_markdown(
                 digest_lines.append(f"**{record['symbol']} 要約**\n\n{record['digest']}\n")
     else:
         summary_table_lines = ["> 表示可能なデータがありませんでした。"]
+        official_section_lines = []
+        breakout_section_lines = []
 
     notes_lines: List[str] = []
     errors = list(errors)
@@ -457,6 +467,8 @@ def compose_markdown(
         + column_guides
         + ["\n### サマリー\n"]
         + summary_table_lines
+        + official_section_lines
+        + breakout_section_lines
     )
     if digest_lines:
         sections += ["\n"] + digest_lines
