@@ -314,8 +314,8 @@ def compose_markdown(
         "- `Symbol`: 東証ティッカー（例: 2726.T）。",
         "- `銘柄名`: Kabutanより取得した日本語正式名。",
         "- `市場`: 東証の市場区分（プライム/スタンダード/グロースなど）。",
-        "- `Score（新高値）`: 新高値ブレイク投資術の年次・四半期チェック合計（0〜7）。",
-        "- `公式Score（株の公式）`: 株の公式ルールの達成数（適用可能な項目のみカウント）。",
+        "- `スコア（新高値）`: 新高値ブレイク投資術の年次・四半期チェック合計（スコア/最大7）。",
+        "- `スコア（株の公式）`: 株の公式ルールの達成数（スコア/適用可能項目）。",
         "- `PER`: Kabutanの現在PER（数値がない場合は空欄）。",
         "- `直近1Y YoY`: 直近通期の経常利益YoY（前年比）。",
         "- `直近2Y CAGR`: 直近2期の経常利益CAGR。",
@@ -342,7 +342,6 @@ def compose_markdown(
     ]
 
     digest_lines: List[str] = []
-    digest_failures: List[str] = []
     if not df.empty:
         official_section_lines = [
             "\n### 株の公式の基準（買い）\n",
@@ -356,8 +355,8 @@ def compose_markdown(
             "Symbol",
             "銘柄名",
             "市場",
-            "Score（新高値）",
-            "公式Score（株の公式）",
+            "スコア（新高値）",
+            "スコア（株の公式）",
             "PER",
             "直近1Y YoY",
             "直近2Y CAGR",
@@ -414,14 +413,27 @@ def compose_markdown(
             "|" + "|".join(header_columns) + "|",
             "|" + "|".join(alignment) + "|",
         ]
+        group_row: List[str] = []
+        for idx, _ in enumerate(header_columns):
+            if 11 <= idx <= 18:
+                group_row.append("株の公式")
+            elif idx >= 19:
+                group_row.append("新高値ブレイク")
+            else:
+                group_row.append("")
+        summary_table_lines.append("|" + "|".join(group_row) + "|")
         for record in df.to_dict("records"):
             official_score_display = ""
             applicable = record.get("official_applicable")
             if applicable:
                 official_score_display = f"{record.get('official_score', 0)}/{applicable}"
+            score_new_high_display = ""
+            score_value = record.get("score_0to7")
+            if score_value not in ("", None):
+                score_new_high_display = f"{score_value}/7"
             summary_table_lines.append(
                 f"|{record['symbol']}|{record.get('name_jp', '')}|{record.get('market', '')}|"
-                f"{record.get('score_0to7', '')}|"
+                f"{score_new_high_display}|"
                 f"{official_score_display}|"
                 f"{ratio(record.get('per'), unit='')}|"
                 f"{perc(record.get('annual_last1_yoy'))}|"
@@ -447,29 +459,12 @@ def compose_markdown(
                 f"{'✅' if record.get('q_improving_margin') else '—'}|"
             )
             digest_text = record.get("digest", "")
-            if digest_text:
-                if digest_text.startswith("(Perplexity要約失敗"):
-                    digest_failures.append(record["symbol"])
-                else:
-                    digest_lines.append(f"**{record['symbol']} 要約**\n\n{digest_text}\n")
+            if digest_text and not digest_text.startswith("(Perplexity要約失敗"):
+                digest_lines.append(f"**{record['symbol']} 要約**\n\n{digest_text}\n")
     else:
         summary_table_lines = ["> 表示可能なデータがありませんでした。"]
         official_section_lines = []
         breakout_section_lines = []
-
-    notes_lines: List[str] = []
-    errors = list(errors)
-    if errors:
-        notes_lines.append("\n### 注記（処理できなかった銘柄など）\n")
-        for err in errors[:50]:
-            notes_lines.append(f"- {err}")
-        if len(errors) > 50:
-            notes_lines.append(f"- …ほか {len(errors) - 50} 件")
-    if digest_failures:
-        notes_lines.append("\n### 注記（AI要約）\n")
-        notes_lines.append(
-            f"- Perplexity要約を生成できなかった銘柄: {len(digest_failures)} 件（PERPLEXITY_API_KEY の未設定または権限不足）。"
-        )
 
     sections: List[str] = (
         summary_lines
@@ -482,7 +477,7 @@ def compose_markdown(
     )
     if digest_lines:
         sections += ["\n"] + digest_lines
-    sections += ["\n"] + notes_lines
+    sections.append("\n")
     return "\n".join(sections)
 
 

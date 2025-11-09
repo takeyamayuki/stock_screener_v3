@@ -44,21 +44,24 @@ def test_compose_markdown_includes_table_and_digest():
 
     assert "### 株の公式の基準（買い）" in markdown
     assert "### 新高値ブレイク投資術の基準（買い）" in markdown
-    assert "|Symbol|銘柄名|市場|Score（新高値）|公式Score（株の公式）|PER|" in markdown
-    assert "|1234.T|テスト株式会社|プライム|5|" in markdown
+    assert "|Symbol|銘柄名|市場|スコア（新高値）|スコア（株の公式）|PER|" in markdown
+    assert "|株の公式|" in markdown
+    assert "|新高値ブレイク|" in markdown
+    assert "|1234.T|テスト株式会社|プライム|5/7|6/7|" in markdown
     assert "**1234.T 要約**" in markdown
     assert "サンプル要約" in markdown
     assert "### 指標の見方" in markdown
 
 
-def test_compose_markdown_includes_error_section():
+def test_compose_markdown_omits_error_notes():
     df = pd.DataFrame(columns=["symbol"])
     markdown = screener.compose_markdown(df, errors=["foo: error"], num_input_symbols=3)
     assert "> 表示可能なデータがありませんでした。" in markdown
-    assert "foo: error" in markdown
+    assert "foo: error" not in markdown
+    assert "注記" not in markdown
 
 
-def test_compose_markdown_summarizes_perplexity_failures():
+def test_compose_markdown_hides_perplexity_failures():
     df = pd.DataFrame(
         [
             {
@@ -74,4 +77,4 @@ def test_compose_markdown_summarizes_perplexity_failures():
     )
     markdown = screener.compose_markdown(df, errors=[], num_input_symbols=1)
     assert "(Perplexity要約失敗" not in markdown
-    assert "Perplexity要約を生成できなかった銘柄: 1 件" in markdown
+    assert "注記" not in markdown
