@@ -16,27 +16,53 @@ def test_parse_report_date_and_format_percentage():
     assert weekly.format_percentage(None) == "—"
 
 
+def make_row(
+    report_date,
+    symbol,
+    score_new_high,
+    official_score=None,
+    official_applicable=None,
+):
+    return weekly.ScreenerRow(
+        report_date=report_date,
+        symbol=symbol,
+        name_jp="テスト",
+        market="プライム",
+        score_new_high=score_new_high,
+        official_score=official_score,
+        official_applicable=official_applicable,
+        annual_last1_yoy=None,
+        annual_last2_cagr=None,
+        q_last_pretax_yoy=None,
+        q_last_revenue_yoy=None,
+        notes="",
+    )
+
+
 def test_build_summary_picks_best_score():
     rows = [
-        weekly.ScreenerRow(date(2025, 10, 20), "AAA", "テスト", "プライム", 6, None, None, None, None, ""),
-        weekly.ScreenerRow(date(2025, 10, 21), "AAA", "テスト", "プライム", 7, None, None, None, None, ""),
-        weekly.ScreenerRow(date(2025, 10, 22), "BBB", "テスト2", "スタンダード", 5, None, None, None, None, ""),
+        make_row(date(2025, 10, 20), "AAA", 6, 5, 8),
+        make_row(date(2025, 10, 21), "AAA", 7, 6, 8),
+        make_row(date(2025, 10, 22), "BBB", 5, 7, 8),
     ]
-    entries = weekly.build_summary(rows)
-    assert [entry.row.symbol for entry in entries] == ["AAA"]
-    assert entries[0].row.score == 7
+    results = weekly.build_summary(rows)
+    assert [entry.row.symbol for entry in results.new_high] == ["AAA"]
+    assert results.new_high[0].score_display == "7/7"
+    assert [entry.row.symbol for entry in results.official] == ["BBB", "AAA"]
 
 
 def test_iter_report_rows_parses_csv(tmp_path, monkeypatch):
     reports_dir = tmp_path
     csv_path = reports_dir / "screen_20251022.csv"
     csv_path.write_text(
-        "symbol,name_jp,market,score_0to7,annual_last1_yoy,annual_last2_cagr\n"
-        "AAA,テスト,プライム,6,0.2,invalid\n",
+        "symbol,name_jp,market,score_0to7,official_score,official_applicable,annual_last1_yoy,annual_last2_cagr\n"
+        "AAA,テスト,プライム,6,5,8,0.2,invalid\n",
         encoding="utf-8",
     )
     rows = list(weekly.iter_report_rows([csv_path]))
     assert rows[0].annual_last2_cagr is None
+    assert rows[0].official_score == 5
+    assert rows[0].official_applicable == 8
 
 
 def write_csv(path: Path, rows: list[str]):
@@ -51,15 +77,15 @@ def test_main_generates_markdown(tmp_path, monkeypatch):
     write_csv(
         reports_dir / "screen_20251020.csv",
         [
-            "symbol,name_jp,market,score_0to7,annual_last1_yoy,annual_last2_cagr,q_last_pretax_yoy,q_last_revenue_yoy,notes",
-            "AAA,テスト,プライム,6,0.2,0.3,0.4,0.5,好調",
+            "symbol,name_jp,market,score_0to7,official_score,official_applicable,annual_last1_yoy,annual_last2_cagr,q_last_pretax_yoy,q_last_revenue_yoy,notes",
+            "AAA,テスト,プライム,6,6,8,0.2,0.3,0.4,0.5,好調",
         ],
     )
     write_csv(
         reports_dir / "screen_20251021.csv",
         [
-            "symbol,name_jp,market,score_0to7,annual_last1_yoy,annual_last2_cagr,q_last_pretax_yoy,q_last_revenue_yoy,notes",
-            "BBB,テスト2,スタンダード,7,0.1,0.2,0.3,0.4,注意",
+            "symbol,name_jp,market,score_0to7,official_score,official_applicable,annual_last1_yoy,annual_last2_cagr,q_last_pretax_yoy,q_last_revenue_yoy,notes",
+            "BBB,テスト2,スタンダード,7,7,8,0.1,0.2,0.3,0.4,注意",
         ],
     )
 
@@ -68,4 +94,8 @@ def test_main_generates_markdown(tmp_path, monkeypatch):
 
     output = (reports_dir / "weekly_summary_20251021.md").read_text(encoding="utf-8")
     assert "週間ハイライト" in output
+    assert "## スコア（新高値）ハイライト" in output
+    assert "## スコア（株の公式）ハイライト" in output
+    assert "7/7" in output
+    assert "7/8" in output
     assert "BBB" in output
