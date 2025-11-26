@@ -62,6 +62,24 @@ def test_main_generates_reports(tmp_path, monkeypatch):
     monkeypatch.setattr(screener, "REPORT_MD", md_path)
     monkeypatch.setattr(screener, "FinancialDataProvider", lambda: DummyProvider())
     monkeypatch.setattr(screener, "perplexity_digest", lambda symbol: "サマリー")
+    monkeypatch.setattr(
+        screener,
+        "official_checks",
+        lambda *_: {
+            "metrics": {
+                "rule1_new_high": True,
+                "rule3_growth": True,
+                "rule3_no_decline": True,
+                "rule4_recent20": True,
+                "rule5_sales": True,
+                "rule6_profit": True,
+                "rule7_resilience": True,
+                "rule8_per": True,
+            },
+            "applicable": screener.OFFICIAL_MAX_SCORE,
+            "score": 6,
+        },
+    )
     monkeypatch.setattr(screener, "FINANCIAL_RETRY_DELAY", 0)
     monkeypatch.setattr(screener, "SYMBOL_DELAY_SECONDS", 0)
 
@@ -88,3 +106,42 @@ def test_main_handles_empty_symbols(tmp_path, monkeypatch):
 
     assert csv_path.read_text(encoding="utf-8").strip() == ""
     assert "シンボルが0件" in md_path.read_text(encoding="utf-8")
+
+
+def test_main_appends_note_when_official_applicable_is_low(tmp_path, monkeypatch):
+    symbols_path = tmp_path / "symbols.txt"
+    symbols_path.write_text("1234.T\n", encoding="utf-8")
+
+    csv_path = tmp_path / "screen_TEST.csv"
+    md_path = tmp_path / "screen_TEST.md"
+
+    monkeypatch.setattr(screener, "SYMBOLS_PATH", symbols_path)
+    monkeypatch.setattr(screener, "REPORT_CSV", csv_path)
+    monkeypatch.setattr(screener, "REPORT_MD", md_path)
+    monkeypatch.setattr(screener, "FinancialDataProvider", lambda: DummyProvider())
+    monkeypatch.setattr(
+        screener,
+        "official_checks",
+        lambda *_: {
+            "metrics": {
+                "rule1_new_high": True,
+                "rule3_growth": True,
+                "rule3_no_decline": True,
+                "rule4_recent20": True,
+                "rule5_sales": True,
+                "rule6_profit": True,
+                "rule7_resilience": True,
+                "rule8_per": True,
+            },
+            "applicable": 4,
+            "score": 4,
+        },
+    )
+    monkeypatch.setattr(screener, "perplexity_digest", lambda symbol: "")
+    monkeypatch.setattr(screener, "FINANCIAL_RETRY_DELAY", 0)
+    monkeypatch.setattr(screener, "SYMBOL_DELAY_SECONDS", 0)
+
+    screener.main()
+
+    df = pd.read_csv(csv_path)
+    assert "公式スコア上限4/8" in df.loc[0, "notes"]

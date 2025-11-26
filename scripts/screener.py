@@ -19,14 +19,21 @@ MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "60"))
 FINANCIAL_RETRY_ATTEMPTS = int(os.environ.get("FINANCIAL_RETRY_ATTEMPTS", "1"))
 FINANCIAL_RETRY_DELAY = float(os.environ.get("FINANCIAL_RETRY_DELAY", "3"))
 SYMBOL_DELAY_SECONDS = float(os.environ.get("SYMBOL_DELAY_SECONDS", "0"))
+OFFICIAL_MAX_SCORE = 8
+_market_ratio_env = os.environ.get("NEW_HIGH_RATIO") or os.environ.get("NEW_HIGH_RATIO_PCT")
+try:
+    MARKET_STRENGTH_RATIO = float(_market_ratio_env) if _market_ratio_env else None
+except ValueError:
+    MARKET_STRENGTH_RATIO = None
 
 JST = tz.gettz("Asia/Tokyo")
 TODAY = datetime.now(JST).strftime("%Y%m%d")
 
 SYMBOLS_PATH = "config/symbols.txt"
-REPORT_CSV = f"reports/screen_{TODAY}.csv"
-REPORT_MD = f"reports/screen_{TODAY}.md"
-os.makedirs("reports", exist_ok=True)
+REPORT_DIR = "reports/jp"
+REPORT_CSV = f"{REPORT_DIR}/screen_{TODAY}.csv"
+REPORT_MD = f"{REPORT_DIR}/screen_{TODAY}.md"
+os.makedirs(REPORT_DIR, exist_ok=True)
 
 
 def to_dataframe(records, value_key: str, revenue_key: str) -> pd.DataFrame:
@@ -271,6 +278,17 @@ def checkmark(value: Optional[bool]) -> str:
     return "✅" if value else "—"
 
 
+def market_strength_note(ratio: Optional[float]) -> str:
+    if ratio is None or pd.isna(ratio):
+        return ""
+    label = "中立: 通常"
+    if ratio < 0.03:
+        label = "弱い: 控えめ"
+    elif ratio >= 0.07:
+        label = "強い: 増やす"
+    return f"{label} ({ratio * 100:.1f}%)"
+
+
 def fetch_financials(provider: FinancialDataProvider, symbol: str) -> Tuple[list, list]:
     attempts = FINANCIAL_RETRY_ATTEMPTS + 1
     last_annual: list = []
@@ -315,7 +333,7 @@ def compose_markdown(
         "- `銘柄名`: Kabutanより取得した日本語正式名。",
         "- `市場`: 東証の市場区分（プライム/スタンダード/グロースなど）。",
         "- `スコア（新高値）`: 新高値ブレイク投資術の年次・四半期チェック合計（スコア/最大7）。",
-        "- `スコア（株の公式）`: 株の公式ルールの達成数（スコア/適用可能項目）。",
+        "- `スコア（株の公式）`: 株の公式ルールの達成数（スコア/最大8）。適用項目が欠ける場合はメモ欄に理由を追記。",
         "- `PER`: Kabutanの現在PER（数値がない場合は空欄）。",
         "- `直近1Y YoY`: 直近通期の経常利益YoY（前年比）。",
         "- `直近2Y CAGR`: 直近2期の経常利益CAGR。",
@@ -323,6 +341,8 @@ def compose_markdown(
         "- `Q(rev YoY)`: 直近四半期の売上高YoY。",
         "- `メモ`: 未達項目や注意点のまとめ。",
         "- `新高値`: 株の公式 1。52週高値リスト由来か（原則✅）。",
+        "- `購入量ガイド（株の公式）`: 新高値銘柄数レシオに基づくポジション調整（弱:控えめ/中立:通常/強:増やす）。",
+        "   新高値銘柄数レシオ = 過去1年の高値更新銘柄数 / 東証一部の全銘柄数。",
         "- `年平均+7%`: 株の公式 3-1。過去の年平均成長率が7%以上か。",
         "- `減益なし`: 株の公式 3-2。過去5〜10年で大きな減益がないか。",
         "- `直近2Y+20%`: 株の公式 4。直近2期の経常CAGR/YoYが20%以上か。",
@@ -364,6 +384,7 @@ def compose_markdown(
             "Q(rev YoY)",
             "メモ",
             "新高値",
+            "購入量ガイド（株の公式）",
             "年平均+7%",
             "減益なし",
             "直近2Y+20%",
@@ -408,6 +429,7 @@ def compose_markdown(
             ":---:",
             ":---:",
             ":---:",
+            ":---:",
         ]
         summary_table_lines = [
             "|" + "|".join(header_columns) + "|",
@@ -415,9 +437,9 @@ def compose_markdown(
         ]
         group_row: List[str] = []
         for idx, _ in enumerate(header_columns):
-            if 11 <= idx <= 18:
+            if 11 <= idx <= 19:
                 group_row.append("株の公式")
-            elif idx >= 19:
+            elif idx >= 20:
                 group_row.append("新高値ブレイク")
             else:
                 group_row.append("")
@@ -425,8 +447,8 @@ def compose_markdown(
         for record in df.to_dict("records"):
             official_score_display = ""
             applicable = record.get("official_applicable")
-            if applicable:
-                official_score_display = f"{record.get('official_score', 0)}/{applicable}"
+            if record.get("official_score") is not None:
+                official_score_display = f"{record.get('official_score', 0)}/{OFFICIAL_MAX_SCORE}"
             score_new_high_display = ""
             score_value = record.get("score_0to7")
             if score_value not in ("", None):
@@ -442,6 +464,7 @@ def compose_markdown(
                 f"{perc(record.get('q_last_revenue_yoy'))}|"
                 f"{record.get('notes', '')}|"
                 f"{checkmark(record.get('official_rule1_new_high'))}|"
+                f"{market_strength_note(record.get('market_strength_ratio'))}|"
                 f"{checkmark(record.get('official_rule3_growth'))}|"
                 f"{checkmark(record.get('official_rule3_no_decline'))}|"
                 f"{checkmark(record.get('official_rule4_recent20'))}|"
@@ -512,6 +535,13 @@ def main():
             info = fetch_company_info(provider, symbol)
             official_result = official_checks(annual_result, quarterly_result, info)
             official_metrics = official_result["metrics"]
+            applicable = official_result.get("applicable")
+            applicable = applicable if applicable is not None else 0
+            if applicable < OFFICIAL_MAX_SCORE:
+                notes = "; ".join(
+                    part for part in [notes, f"公式スコア上限{applicable}/{OFFICIAL_MAX_SCORE}: データ不足"]
+                    if part
+                )
 
             note_parts = [part for part in notes.split("; ") if part]
             official_note_map = {
@@ -581,6 +611,7 @@ def main():
                     "notes": notes,
                     "per": info.per if info else None,
                     "digest": perplexity_digest(symbol) if sc >= 3 else "",
+                    "market_strength_ratio": MARKET_STRENGTH_RATIO,
                 }
             )
         except Exception as exc:

@@ -27,12 +27,13 @@ from typing import Iterable, Optional
 from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REPORTS_DIR = REPO_ROOT / "reports"
+REPORTS_DIR = REPO_ROOT / "reports" / "jp"
 OUTPUT_PREFIX = "weekly_summary"
 DEFAULT_DAYS = 7
 NEW_HIGH_MAX_SCORE = 7
 NEW_HIGH_SCORE_THRESHOLD = 6
 OFFICIAL_SCORE_RATIO_THRESHOLD = 0.75
+OFFICIAL_MAX_SCORE = 8
 JST = ZoneInfo("Asia/Tokyo")
 
 
@@ -92,15 +93,10 @@ class SummaryEntry:
     row: ScreenerRow
     score_value: float
     score_display: str
+    official_display: str
 
     def sort_key(self) -> tuple[float, date, str]:
         return (-self.score_value, self.row.report_date, self.row.symbol)
-
-
-@dataclass
-class SummaryResults:
-    new_high: list[SummaryEntry]
-    official: list[SummaryEntry]
 
 
 def parse_report_date(path: Path) -> Optional[date]:
@@ -160,16 +156,28 @@ def _score_official(row: ScreenerRow) -> Optional[tuple[float, str]]:
     return ratio, display
 
 
-def _select_best_entries(
-    rows: list[ScreenerRow], score_fn
-) -> list[SummaryEntry]:
+def build_summary(entries: Iterable[ScreenerRow]) -> list[SummaryEntry]:
+    rows = list(entries)
     best_by_symbol: dict[str, SummaryEntry] = {}
     for row in rows:
-        result = score_fn(row)
-        if result is None:
+        nh_result = _score_new_high(row)
+        off_result = _score_official(row)
+        if nh_result is None or off_result is None:
             continue
-        score_value, score_display = result
-        candidate = SummaryEntry(row=row, score_value=score_value, score_display=score_display)
+        # 厳密に 8/8 のみを採用
+        if (
+            row.official_score != OFFICIAL_MAX_SCORE
+            or row.official_applicable != OFFICIAL_MAX_SCORE
+        ):
+            continue
+        nh_value, nh_display = nh_result
+        _, off_display = off_result
+        candidate = SummaryEntry(
+            row=row,
+            score_value=nh_value,
+            score_display=nh_display,
+            official_display=off_display,
+        )
         existing = best_by_symbol.get(row.symbol)
         if existing is None:
             best_by_symbol[row.symbol] = candidate
@@ -182,85 +190,48 @@ def _select_best_entries(
     return sorted(best_by_symbol.values(), key=lambda entry: entry.sort_key())
 
 
-def build_summary(entries: Iterable[ScreenerRow]) -> SummaryResults:
-    rows = list(entries)
-    return SummaryResults(
-        new_high=_select_best_entries(rows, _score_new_high),
-        official=_select_best_entries(rows, _score_official),
-    )
-
-
-def _render_section(
-    title: str,
-    entries: list[SummaryEntry],
-    score_header: str,
-) -> list[str]:
-    lines: list[str] = []
-    lines.append(f"## {title}")
-    lines.append("")
-    if not entries:
-        lines.append("> 該当なし")
-        lines.append("")
-        return lines
-
-    lines.append(
-        f"|日付|Symbol|銘柄名|市場|{score_header}|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|メモ|"
-    )
-    lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---|")
-    for entry in entries:
-        row = entry.row
-        lines.append(
-            "|{date}|{symbol}|{name}|{market}|{score}|{yoy1}|{cagr}|{pretax}|{rev}|{notes}|".format(
-                date=row.report_date.isoformat(),
-                symbol=row.symbol,
-                name=row.name_jp or "—",
-                market=row.market or "—",
-                score=entry.score_display,
-                yoy1=format_percentage(row.annual_last1_yoy),
-                cagr=format_percentage(row.annual_last2_cagr),
-                pretax=format_percentage(row.q_last_pretax_yoy),
-                rev=format_percentage(row.q_last_revenue_yoy),
-                notes=row.notes.replace("\n", " ") or "—",
-            )
-        )
-    lines.append("")
-    return lines
-
-
 def write_summary(
-    results: SummaryResults,
+    results: list[SummaryEntry],
     as_of: date,
     window_start: date,
     output_path: Path,
 ) -> None:
     new_high_threshold_label = f"{NEW_HIGH_SCORE_THRESHOLD}/{NEW_HIGH_MAX_SCORE}"
-    official_threshold_label = f"{int(OFFICIAL_SCORE_RATIO_THRESHOLD * 100)}%"
     lines: list[str] = []
     lines.append(f"# 週間ハイライト（{as_of.isoformat()} JSTまで）")
     lines.append("")
     lines.append(
         f"- 期間: {window_start.isoformat()} 〜 {as_of.isoformat()} (JST)"
     )
-    lines.append(f"- 閾値（スコア（新高値））: {new_high_threshold_label}")
-    lines.append(f"- 閾値（スコア（株の公式））: {official_threshold_label}")
-    lines.append(f"- 抽出銘柄数（スコア（新高値））: {len(results.new_high)}")
-    lines.append(f"- 抽出銘柄数（スコア（株の公式））: {len(results.official)}")
+    lines.append(f"- 閾値: スコア（新高値）{new_high_threshold_label} かつ スコア（株の公式）{OFFICIAL_MAX_SCORE}/{OFFICIAL_MAX_SCORE}")
+    lines.append(f"- 抽出銘柄数: {len(results)}")
     lines.append("")
 
-    lines.extend(
-        _render_section(
-            f"スコア（新高値）ハイライト（{new_high_threshold_label} 以上）",
-            results.new_high,
-            "スコア（新高値）",
-        )
+    lines.append(
+        "|日付|Symbol|銘柄名|市場|スコア（新高値）|スコア（株の公式）|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|メモ|"
     )
-    lines.extend(
-        _render_section(
-            f"スコア（株の公式）ハイライト（{official_threshold_label} 以上）",
-            results.official,
-            "スコア（株の公式）",
-        )
-    )
+    lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---:|---|")
+    if results:
+        for entry in results:
+            row = entry.row
+            lines.append(
+                "|{date}|{symbol}|{name}|{market}|{score_nh}|{score_off}|{yoy1}|{cagr}|{pretax}|{rev}|{notes}|".format(
+                    date=row.report_date.isoformat(),
+                    symbol=row.symbol,
+                    name=row.name_jp or "—",
+                    market=row.market or "—",
+                    score_nh=entry.score_display,
+                    score_off=entry.official_display,
+                    yoy1=format_percentage(row.annual_last1_yoy),
+                    cagr=format_percentage(row.annual_last2_cagr),
+                    pretax=format_percentage(row.q_last_pretax_yoy),
+                    rev=format_percentage(row.q_last_revenue_yoy),
+                    notes=row.notes.replace("\n", " ") or "—",
+                )
+            )
+    else:
+        lines.append("|—|—|—|—|—|—|—|—|—|—|該当なし|")
+    lines.append("")
     lines.append(
         "※ 数値は日次スクリーナーのCSV出力を再掲したもので、四捨五入しています。"
     )

@@ -36,6 +36,7 @@ def test_compose_markdown_includes_table_and_digest():
                 "notes": "テストノート",
                 "digest": "サンプル要約",
                 "per": 28.0,
+                "market_strength_ratio": 0.1,
             }
         ]
     )
@@ -47,7 +48,8 @@ def test_compose_markdown_includes_table_and_digest():
     assert "|Symbol|銘柄名|市場|スコア（新高値）|スコア（株の公式）|PER|" in markdown
     assert "|株の公式|" in markdown
     assert "|新高値ブレイク|" in markdown
-    assert "|1234.T|テスト株式会社|プライム|5/7|6/7|" in markdown
+    assert "|1234.T|テスト株式会社|プライム|5/7|6/8|28.0|" in markdown
+    assert "強い: 増やす (10.0%)" in markdown
     assert "**1234.T 要約**" in markdown
     assert "サンプル要約" in markdown
     assert "### 指標の見方" in markdown
