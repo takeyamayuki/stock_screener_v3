@@ -2,11 +2,18 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 import pandas as pd
 
-from scripts import screener as base
-from scripts.providers.alpha_vantage_us import AlphaVantageUS
+# Ensure project root is on sys.path when run as a script
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts import screener as base  # noqa: E402
+from scripts.providers.alpha_vantage_us import AlphaVantageUS  # noqa: E402
 
 JST_TODAY = base.TODAY
 REPORT_DIR = "reports/us"

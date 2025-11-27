@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import List
 
 import requests
 from bs4 import BeautifulSoup
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 TARGET_URL = "https://us.kabutan.jp/warnings/record_w52_high_price"
 OUTPUT_PATH = Path("config/symbols_us.txt")
