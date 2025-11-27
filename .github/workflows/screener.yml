@@ -45,7 +45,7 @@ jobs:
       - name: Run US screener (Alpha Vantage)
         env:
           ALPHAVANTAGE_KEY: ${{ secrets.ALPHAVANTAGE_KEY }}
-          ALPHAVANTAGE_US_THROTTLE_SECONDS: "13"
+          ALPHAVANTAGE_US_THROTTLE_SECONDS: "15"
         run: python scripts/screener_us.py
 
       - name: Commit results

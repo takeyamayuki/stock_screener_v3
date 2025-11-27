@@ -10,7 +10,7 @@ import requests
 from .models import AnnualRecord, CompanyInfo, QuarterlyRecord
 
 ALPHAVANTAGE_KEY = os.environ.get("ALPHAVANTAGE_KEY")
-ALPHAVANTAGE_US_THROTTLE_SECONDS = float(os.environ.get("ALPHAVANTAGE_US_THROTTLE_SECONDS", "13"))
+ALPHAVANTAGE_US_THROTTLE_SECONDS = float(os.environ.get("ALPHAVANTAGE_US_THROTTLE_SECONDS", "15"))
 
 
 def _parse_date(value: str) -> date:
@@ -25,6 +25,15 @@ def _safe_float(value: str) -> Optional[float]:
         return None
 
 
+def _pick_income(item: dict) -> Optional[float]:
+    # Alpha Vantage sometimes lacks operatingIncome; fall back to netIncome.
+    for key in ("operatingIncome", "netIncome"):
+        val = item.get(key)
+        if val not in (None, "", "None"):
+            return _safe_float(val)
+    return None
+
+
 class AlphaVantageUS:
     def __init__(self) -> None:
         if not ALPHAVANTAGE_KEY:
@@ -35,6 +44,8 @@ class AlphaVantageUS:
         resp = requests.get("https://www.alphavantage.co/query", params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
+        if "Note" in data or "Information" in data or "Error Message" in data:
+            raise RuntimeError(data.get("Note") or data.get("Information") or data.get("Error Message"))
         time.sleep(ALPHAVANTAGE_US_THROTTLE_SECONDS)
         return data
 
@@ -49,7 +60,7 @@ class AlphaVantageUS:
                 AnnualRecord(
                     period_label=end[:4],
                     end_date=_parse_date(end),
-                    ordinary_income=_safe_float(item.get("operatingIncome")),
+                    ordinary_income=_pick_income(item),
                     revenue=_safe_float(item.get("totalRevenue")),
                     ordinary_income_yoy=None,
                     revenue_yoy=None,
@@ -71,7 +82,7 @@ class AlphaVantageUS:
                 QuarterlyRecord(
                     period_label=label,
                     end_date=_parse_date(end),
-                    ordinary_income=_safe_float(item.get("operatingIncome")),
+                    ordinary_income=_pick_income(item),
                     revenue=_safe_float(item.get("totalRevenue")),
                     ordinary_income_yoy=None,
                     revenue_yoy=None,
