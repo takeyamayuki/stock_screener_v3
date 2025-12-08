@@ -101,6 +101,7 @@ class AlphaVantageUS:
             return None
         per = _safe_float(data.get("PERatio"))
         market = data.get("Exchange") or ""
+        market_cap = _safe_float(data.get("MarketCapitalization"))
         return CompanyInfo(
             symbol=symbol,
             name=name,
@@ -108,4 +109,5 @@ class AlphaVantageUS:
             market_code=market,
             source="alpha_vantage",
             per=per,
+            market_cap=market_cap,
         )

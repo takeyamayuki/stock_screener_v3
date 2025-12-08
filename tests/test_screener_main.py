@@ -24,7 +24,9 @@ class DummyProvider:
         ]
 
     def get_company_info(self, symbol: str):
-        return CompanyInfo(symbol, "テスト銘柄", "プライム", "東証Ｐ", "kabutan", per=25.0)
+        return CompanyInfo(
+            symbol, "テスト銘柄", "プライム", "東証Ｐ", "kabutan", per=25.0, market_cap=50000000000
+        )
 
 
 def test_perplexity_digest_success_and_failure(monkeypatch):
@@ -75,6 +77,7 @@ def test_main_generates_reports(tmp_path, monkeypatch):
                 "rule6_profit": True,
                 "rule7_resilience": True,
                 "rule8_per": True,
+                "rule9_small_cap": True,
             },
             "applicable": screener.OFFICIAL_MAX_SCORE,
             "score": 6,
@@ -132,6 +135,7 @@ def test_main_appends_note_when_official_applicable_is_low(tmp_path, monkeypatch
                 "rule6_profit": True,
                 "rule7_resilience": True,
                 "rule8_per": True,
+                "rule9_small_cap": True,
             },
             "applicable": 4,
             "score": 4,
@@ -144,4 +148,4 @@ def test_main_appends_note_when_official_applicable_is_low(tmp_path, monkeypatch
     screener.main()
 
     df = pd.read_csv(csv_path)
-    assert "公式スコア上限4/8" in df.loc[0, "notes"]
+    assert "公式スコア上限4/9" in df.loc[0, "notes"]

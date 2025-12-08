@@ -19,7 +19,13 @@ MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "60"))
 FINANCIAL_RETRY_ATTEMPTS = int(os.environ.get("FINANCIAL_RETRY_ATTEMPTS", "1"))
 FINANCIAL_RETRY_DELAY = float(os.environ.get("FINANCIAL_RETRY_DELAY", "3"))
 SYMBOL_DELAY_SECONDS = float(os.environ.get("SYMBOL_DELAY_SECONDS", "0"))
-OFFICIAL_MAX_SCORE = 8
+OFFICIAL_MAX_SCORE = 9
+try:
+    MARKET_CAP_SMALL_THRESHOLD = float(
+        os.environ.get("MARKET_CAP_SMALL_THRESHOLD", "50000000000")
+    )
+except ValueError:
+    MARKET_CAP_SMALL_THRESHOLD = 50000000000.0
 ALLOW_EMPTY_FINANCIALS = os.environ.get("ALLOW_EMPTY_FINANCIALS", "false").lower() == "true"
 _market_ratio_env = os.environ.get("NEW_HIGH_RATIO") or os.environ.get("NEW_HIGH_RATIO_PCT")
 try:
@@ -211,6 +217,9 @@ def official_checks(
     per_ok = None
     if info and info.per is not None and not pd.isna(info.per):
         per_ok = info.per <= 60
+    small_cap_ok = None
+    if info and info.market_cap is not None and not pd.isna(info.market_cap):
+        small_cap_ok = info.market_cap < MARKET_CAP_SMALL_THRESHOLD
     metrics = {
         "rule1_new_high": rule1_new_high,
         "rule3_growth": rule3_growth if avg_growth is not None else None,
@@ -220,6 +229,7 @@ def official_checks(
         "rule6_profit": rule6_profit,
         "rule7_resilience": rule7_resilience,
         "rule8_per": per_ok,
+        "rule9_small_cap": small_cap_ok,
     }
     applicable = sum(1 for value in metrics.values() if value is not None)
     score = sum(1 for value in metrics.values() if value)
@@ -329,12 +339,13 @@ def compose_markdown(
         f"- 入力シンボル数: {num_input_symbols} 件\n",
     ]
 
+    market_cap_label = f"{MARKET_CAP_SMALL_THRESHOLD / 1e8:.0f}億"
     column_guides = [
         "- `Symbol`: 東証ティッカー（例: 2726.T）。",
         "- `銘柄名`: Kabutanより取得した日本語正式名。",
         "- `市場`: 東証の市場区分（プライム/スタンダード/グロースなど）。",
         "- `スコア（新高値）`: 新高値ブレイク投資術の年次・四半期チェック合計（スコア/最大7）。",
-        "- `スコア（株の公式）`: 株の公式ルールの達成数（スコア/最大8）。適用項目が欠ける場合はメモ欄に理由を追記。",
+        "- `スコア（株の公式）`: 株の公式ルールの達成数（スコア/最大9）。適用項目が欠ける場合はメモ欄に理由を追記。",
         "- `PER`: Kabutanの現在PER（数値がない場合は空欄）。",
         "- `直近1Y YoY`: 直近通期の経常利益YoY（前年比）。",
         "- `直近2Y CAGR`: 直近2期の経常利益CAGR。",
@@ -351,6 +362,7 @@ def compose_markdown(
         "- `利益20%`: 株の公式 6。直近四半期で経常YoY+20%を複数回達成したか。",
         "- `揺るぎない`: 株の公式 7。逆風下でも成長を維持しているか（減益なし & 直近Qでマイナスなし）。",
         "- `PER<=60`: 株の公式 8。株価収益率が足切り（60倍）以下か。",
+        f"- `時価総額<{market_cap_label}`: 株の公式 9。時価総額が{market_cap_label}未満なら加点。",
         "- `業績安定`: 新高値ブレイク術 1。年次成長が5〜10%で安定しているか。",
         "- `大幅減益なし`: 新高値ブレイク術 1。途中で大幅減益がないか。",
         "- `直近1Y+20%`: 新高値ブレイク術 2。直近1年の経常利益が20%以上伸びたか。",
@@ -366,7 +378,7 @@ def compose_markdown(
     if not df.empty:
         official_section_lines = [
             "\n### 株の公式の基準（買い）\n",
-            "統合テーブル内の `新高値` 〜 `PER<=60` 列のチェックマークを参照してください。\n",
+            f"統合テーブル内の `新高値` 〜 `時価総額<{market_cap_label}` 列のチェックマークを参照してください。\n",
         ]
         breakout_section_lines = [
             "\n### 新高値ブレイク投資術の基準（買い）\n",
@@ -393,6 +405,7 @@ def compose_markdown(
             "利益20%",
             "揺るぎない",
             "PER<=60",
+            f"時価総額<{market_cap_label}",
             "業績安定",
             "大幅減益なし",
             "直近1Y+20%",
@@ -431,6 +444,8 @@ def compose_markdown(
             ":---:",
             ":---:",
             ":---:",
+            ":---:",
+            ":---:",
         ]
         summary_table_lines = [
             "|" + "|".join(header_columns) + "|",
@@ -438,9 +453,9 @@ def compose_markdown(
         ]
         group_row: List[str] = []
         for idx, _ in enumerate(header_columns):
-            if 11 <= idx <= 19:
+            if 11 <= idx <= 20:
                 group_row.append("株の公式")
-            elif idx >= 20:
+            elif idx >= 21:
                 group_row.append("新高値ブレイク")
             else:
                 group_row.append("")
@@ -473,6 +488,7 @@ def compose_markdown(
                 f"{checkmark(record.get('official_rule6_profit'))}|"
                 f"{checkmark(record.get('official_rule7_resilience'))}|"
                 f"{checkmark(record.get('official_rule8_per'))}|"
+                f"{checkmark(record.get('official_rule9_small_cap'))}|"
                 f"{checkmark(record.get('nh_stable_growth'))}|"
                 f"{checkmark(record.get('nh_no_big_drop'))}|"
                 f"{checkmark(record.get('nh_last1_20'))}|"
@@ -548,6 +564,7 @@ def main():
                 )
 
             note_parts = [part for part in notes.split("; ") if part]
+            market_cap_label = f"{MARKET_CAP_SMALL_THRESHOLD / 1e8:.0f}億"
             official_note_map = {
                 "rule3_growth": "年平均成長+7%未達",
                 "rule3_no_decline": "過去に減益あり",
@@ -556,6 +573,7 @@ def main():
                 "rule6_profit": "経常YoY+20%不足",
                 "rule7_resilience": "揺るぎない成長要件未満",
                 "rule8_per": "PER>60",
+                "rule9_small_cap": f"時価総額>={market_cap_label}",
             }
             for key, message in official_note_map.items():
                 value = official_metrics.get(key)
@@ -600,6 +618,7 @@ def main():
                     "official_rule6_profit": official_metrics.get("rule6_profit"),
                     "official_rule7_resilience": official_metrics.get("rule7_resilience"),
                     "official_rule8_per": official_metrics.get("rule8_per"),
+                    "official_rule9_small_cap": official_metrics.get("rule9_small_cap"),
                     "nh_stable_growth": stable_flag,
                     "nh_no_big_drop": no_big_drop_flag,
                     "nh_last1_20": last1_flag,
@@ -614,6 +633,7 @@ def main():
                     "q_improving_margin": quarterly_result.get("improving_margin"),
                     "notes": notes,
                     "per": info.per if info else None,
+                    "market_cap": info.market_cap if info else None,
                     "digest": perplexity_digest(symbol) if sc >= 3 else "",
                     "market_strength_ratio": MARKET_STRENGTH_RATIO,
                 }

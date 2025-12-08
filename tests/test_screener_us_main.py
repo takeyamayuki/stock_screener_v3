@@ -25,7 +25,7 @@ class DummyUSProvider:
         ]
 
     def get_company_info(self, symbol: str):
-        return CompanyInfo(symbol, "Test US", "NASDAQ", "NASDAQ", "dummy", per=20.0)
+        return CompanyInfo(symbol, "Test US", "NASDAQ", "NASDAQ", "dummy", per=20.0, market_cap=70000000000)
 
 
 def test_screener_us_generates_reports(tmp_path, monkeypatch):
@@ -44,7 +44,7 @@ def test_screener_us_generates_reports(tmp_path, monkeypatch):
     monkeypatch.setattr(screener_us.base, "FINANCIAL_RETRY_DELAY", 0)
     monkeypatch.setattr(screener_us.base, "SYMBOL_DELAY_SECONDS", 0)
     monkeypatch.setattr(screener_us.base, "perplexity_digest", lambda symbol: "")
-    monkeypatch.setattr(screener_us.base, "OFFICIAL_MAX_SCORE", 8)
+    monkeypatch.setattr(screener_us.base, "OFFICIAL_MAX_SCORE", 9)
     monkeypatch.setattr(
         screener_us.base,
         "official_checks",
@@ -58,8 +58,9 @@ def test_screener_us_generates_reports(tmp_path, monkeypatch):
                 "rule6_profit": True,
                 "rule7_resilience": True,
                 "rule8_per": True,
+                "rule9_small_cap": True,
             },
-            "applicable": 8,
+            "applicable": 9,
             "score": 6,
         },
     )
