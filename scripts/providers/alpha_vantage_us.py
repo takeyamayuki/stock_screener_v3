@@ -44,8 +44,10 @@ class AlphaVantageUS:
         resp = requests.get("https://www.alphavantage.co/query", params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
+        # On rate-limit or symbol errors, Alpha Vantage returns Note/Information/Error Message.
+        # We return empty data to allow the caller to handle gracefully instead of raising.
         if "Note" in data or "Information" in data or "Error Message" in data:
-            raise RuntimeError(data.get("Note") or data.get("Information") or data.get("Error Message"))
+            return {}
         time.sleep(ALPHAVANTAGE_US_THROTTLE_SECONDS)
         return data
 

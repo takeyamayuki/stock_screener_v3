@@ -21,6 +21,7 @@ base.SYMBOLS_PATH = "config/symbols_us.txt"
 base.REPORT_CSV = f"{REPORT_DIR}/screen_us_{JST_TODAY}.csv"
 base.REPORT_MD = f"{REPORT_DIR}/screen_us_{JST_TODAY}.md"
 base.FinancialDataProvider = AlphaVantageUS  # type: ignore
+base.ALLOW_EMPTY_FINANCIALS = True
 os.makedirs(REPORT_DIR, exist_ok=True)
 
 

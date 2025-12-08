@@ -20,6 +20,7 @@ FINANCIAL_RETRY_ATTEMPTS = int(os.environ.get("FINANCIAL_RETRY_ATTEMPTS", "1"))
 FINANCIAL_RETRY_DELAY = float(os.environ.get("FINANCIAL_RETRY_DELAY", "3"))
 SYMBOL_DELAY_SECONDS = float(os.environ.get("SYMBOL_DELAY_SECONDS", "0"))
 OFFICIAL_MAX_SCORE = 8
+ALLOW_EMPTY_FINANCIALS = os.environ.get("ALLOW_EMPTY_FINANCIALS", "false").lower() == "true"
 _market_ratio_env = os.environ.get("NEW_HIGH_RATIO") or os.environ.get("NEW_HIGH_RATIO_PCT")
 try:
     MARKET_STRENGTH_RATIO = float(_market_ratio_env) if _market_ratio_env else None
@@ -522,8 +523,11 @@ def main():
         try:
             annual_records, quarterly_records = fetch_financials(provider, symbol)
             if not annual_records and not quarterly_records:
-                errors.append(f"{symbol}: financial data unavailable after retries")
-                continue
+                if not ALLOW_EMPTY_FINANCIALS:
+                    errors.append(f"{symbol}: financial data unavailable after retries")
+                    continue
+                # mark as missing but continue with placeholder data
+                notes = "financial data unavailable; proceeding with blanks"
 
             annual_df = to_dataframe(annual_records, "ordinary_income", "revenue")
             quarterly_df = to_dataframe(quarterly_records, "ordinary_income", "revenue")
