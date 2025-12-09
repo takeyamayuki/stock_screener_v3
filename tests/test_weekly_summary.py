@@ -76,14 +76,14 @@ def test_main_generates_markdown(tmp_path, monkeypatch):
         reports_dir / "screen_20251020.csv",
         [
             "symbol,name_jp,market,score_0to7,official_score,official_applicable,annual_last1_yoy,annual_last2_cagr,q_last_pretax_yoy,q_last_revenue_yoy,notes",
-            "AAA,テスト,プライム,6,8,8,0.2,0.3,0.4,0.5,好調",
+            "AAA,テスト,プライム,6,9,9,0.2,0.3,0.4,0.5,好調",
         ],
     )
     write_csv(
         reports_dir / "screen_20251021.csv",
         [
             "symbol,name_jp,market,score_0to7,official_score,official_applicable,annual_last1_yoy,annual_last2_cagr,q_last_pretax_yoy,q_last_revenue_yoy,notes",
-            "BBB,テスト2,スタンダード,7,8,8,0.1,0.2,0.3,0.4,注意",
+            "BBB,テスト2,スタンダード,7,9,9,0.1,0.2,0.3,0.4,注意",
         ],
     )
 
@@ -94,5 +94,5 @@ def test_main_generates_markdown(tmp_path, monkeypatch):
     assert "週間ハイライト" in output
     assert "|日付|Symbol|銘柄名|市場|スコア（新高値）|スコア（株の公式）|" in output
     assert "7/7" in output
-    assert "8/8" in output
+    assert "9/9" in output
     assert "BBB" in output

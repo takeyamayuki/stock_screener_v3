@@ -12,7 +12,7 @@ def test_compose_markdown_includes_table_and_digest():
                 "market": "プライム",
                 "score_0to7": 5,
                 "official_score": 6,
-                "official_applicable": 7,
+                "official_applicable": 9,
                 "official_rule1_new_high": True,
                 "official_rule3_growth": True,
                 "official_rule3_no_decline": True,
@@ -21,6 +21,7 @@ def test_compose_markdown_includes_table_and_digest():
                 "official_rule6_profit": True,
                 "official_rule7_resilience": True,
                 "official_rule8_per": True,
+                "official_rule9_small_cap": True,
                 "nh_stable_growth": True,
                 "nh_no_big_drop": True,
                 "nh_last1_20": True,
@@ -48,7 +49,7 @@ def test_compose_markdown_includes_table_and_digest():
     assert "|Symbol|銘柄名|市場|スコア（新高値）|スコア（株の公式）|PER|" in markdown
     assert "|株の公式|" in markdown
     assert "|新高値ブレイク|" in markdown
-    assert "|1234.T|テスト株式会社|プライム|5/7|6/8|28.0|" in markdown
+    assert "|1234.T|テスト株式会社|プライム|5/7|6/9|28.0|" in markdown
     assert "強い: 増やす (10.0%)" in markdown
     assert "**1234.T 要約**" in markdown
     assert "サンプル要約" in markdown
