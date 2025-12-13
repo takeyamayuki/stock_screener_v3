@@ -94,9 +94,10 @@ class SummaryEntry:
     score_value: float
     score_display: str
     official_display: str
+    total_score: float
 
     def sort_key(self) -> tuple[float, date, str]:
-        return (-self.score_value, self.row.report_date, self.row.symbol)
+        return (-self.total_score, self.row.report_date, self.row.symbol)
 
 
 def parse_report_date(path: Path) -> Optional[date]:
@@ -172,11 +173,13 @@ def build_summary(entries: Iterable[ScreenerRow]) -> list[SummaryEntry]:
             continue
         nh_value, nh_display = nh_result
         _, off_display = off_result
+        total_score = row.score_new_high + (row.official_score or 0)
         candidate = SummaryEntry(
             row=row,
             score_value=nh_value,
             score_display=nh_display,
             official_display=off_display,
+            total_score=total_score,
         )
         existing = best_by_symbol.get(row.symbol)
         if existing is None:

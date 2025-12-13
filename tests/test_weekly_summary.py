@@ -96,3 +96,14 @@ def test_main_generates_markdown(tmp_path, monkeypatch):
     assert "7/7" in output
     assert "9/9" in output
     assert "BBB" in output
+
+
+def test_build_summary_sorts_by_total_score():
+    rows = [
+        make_row(date(2025, 10, 20), "AAA", 6, 9, 9),
+        make_row(date(2025, 10, 21), "BBB", 7, 9, 9),
+    ]
+    results = weekly.build_summary(rows)
+    assert [entry.row.symbol for entry in results] == ["BBB", "AAA"]
+    assert results[0].total_score == 16  # 7 + 9
+    assert results[1].total_score == 15  # 6 + 9

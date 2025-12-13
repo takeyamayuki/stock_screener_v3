@@ -300,6 +300,20 @@ def market_strength_note(ratio: Optional[float]) -> str:
     return f"{label} ({ratio * 100:.1f}%)"
 
 
+def sort_results(df: pd.DataFrame) -> pd.DataFrame:
+    """Sort by combined scores (new high + official) then tie-breakers."""
+    if df.empty:
+        return df
+    return (
+        df.assign(_total_score=df["score_0to7"].fillna(0) + df["official_score"].fillna(0))
+        .sort_values(
+            ["_total_score", "score_0to7", "official_score", "symbol"],
+            ascending=[False, False, False, True],
+        )
+        .drop(columns="_total_score")
+    )
+
+
 def fetch_financials(provider: FinancialDataProvider, symbol: str) -> Tuple[list, list]:
     attempts = FINANCIAL_RETRY_ATTEMPTS + 1
     last_annual: list = []
@@ -618,7 +632,7 @@ def main():
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        df = df.sort_values(["score_0to7", "symbol"], ascending=[False, True])
+        df = sort_results(df)
     df.to_csv(REPORT_CSV, index=False, encoding="utf-8")
 
     markdown = compose_markdown(df, errors, len(symbols))

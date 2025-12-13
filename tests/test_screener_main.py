@@ -149,3 +149,14 @@ def test_main_appends_note_when_official_applicable_is_low(tmp_path, monkeypatch
 
     df = pd.read_csv(csv_path)
     assert "公式スコア上限4/9" in df.loc[0, "notes"]
+
+
+def test_sort_results_orders_by_combined_score():
+    df = pd.DataFrame(
+        [
+            {"symbol": "BBB", "score_0to7": 6, "official_score": 1},
+            {"symbol": "AAA", "score_0to7": 2, "official_score": 8},
+        ]
+    )
+    sorted_df = screener.sort_results(df)
+    assert list(sorted_df["symbol"]) == ["AAA", "BBB"]
