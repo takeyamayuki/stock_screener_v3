@@ -90,9 +90,14 @@ def test_main_generates_reports(tmp_path, monkeypatch):
 
     df = pd.read_csv(csv_path)
     assert df.loc[0, "name_jp"] == "テスト銘柄"
+    assert df.loc[0, "market_cap"] == 50000000000
     assert df.loc[0, "score_0to7"] >= 4
     assert df.loc[0, "official_score"] >= 1
-    assert "テスト銘柄" in md_path.read_text(encoding="utf-8")
+
+    md_content = md_path.read_text(encoding="utf-8")
+    assert "テスト銘柄" in md_content
+    assert "|時価総額|" in md_content
+    assert "|500億|" in md_content
 
 
 def test_main_handles_empty_symbols(tmp_path, monkeypatch):

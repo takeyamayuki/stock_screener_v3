@@ -10,6 +10,7 @@ def test_compose_markdown_includes_table_and_digest():
                 "symbol": "1234.T",
                 "name_jp": "テスト株式会社",
                 "market": "プライム",
+                "market_cap": 12345678901,
                 "score_0to7": 5,
                 "official_score": 6,
                 "official_applicable": 9,
@@ -46,10 +47,10 @@ def test_compose_markdown_includes_table_and_digest():
 
     assert "### 株の公式の基準（買い）" in markdown
     assert "### 新高値ブレイク投資術の基準（買い）" in markdown
-    assert "|Symbol|銘柄名|市場|スコア（新高値）|スコア（株の公式）|PER|" in markdown
+    assert "|Symbol|銘柄名|市場|時価総額|スコア（新高値）|スコア（株の公式）|PER|" in markdown
     assert "|株の公式|" in markdown
     assert "|新高値ブレイク|" in markdown
-    assert "|1234.T|テスト株式会社|プライム|5/7|6/9|28.0|" in markdown
+    assert "|1234.T|テスト株式会社|プライム|123億|5/7|6/9|28.0|" in markdown
     assert "強い: 増やす (10.0%)" in markdown
     assert "**1234.T 要約**" in markdown
     assert "サンプル要約" in markdown

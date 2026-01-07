@@ -43,6 +43,7 @@ class ScreenerRow:
     symbol: str
     name_jp: str
     market: str
+    market_cap: Optional[float]
     score_new_high: int
     official_score: Optional[int]
     official_applicable: Optional[int]
@@ -77,6 +78,7 @@ class ScreenerRow:
             symbol=row.get("symbol", "").strip(),
             name_jp=row.get("name_jp", "").strip(),
             market=row.get("market", "").strip(),
+            market_cap=parse_optional_float(row.get("market_cap", "")),
             score_new_high=int(float(row.get("score_0to7", "0"))),
             official_score=parse_optional_int(row.get("official_score", "")),
             official_applicable=parse_optional_int(row.get("official_applicable", "")),
@@ -133,6 +135,12 @@ def format_percentage(value: Optional[float]) -> str:
     if value is None:
         return "—"
     return f"{value * 100:.1f}%"
+
+
+def jpy(value: Optional[float]) -> str:
+    if value is None:
+        return "—"
+    return f"{value / 1e8:.0f}億"
 
 
 def _score_new_high(row: ScreenerRow) -> Optional[tuple[float, str]]:
@@ -211,18 +219,19 @@ def write_summary(
     lines.append("")
 
     lines.append(
-        "|日付|Symbol|銘柄名|市場|スコア（新高値）|スコア（株の公式）|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|メモ|"
+        "|日付|Symbol|銘柄名|市場|時価総額|スコア（新高値）|スコア（株の公式）|直近1Y YoY|直近2Y CAGR|Q(pretax YoY)|Q(rev YoY)|メモ|"
     )
-    lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---:|---|")
+    lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|")
     if results:
         for entry in results:
             row = entry.row
             lines.append(
-                "|{date}|{symbol}|{name}|{market}|{score_nh}|{score_off}|{yoy1}|{cagr}|{pretax}|{rev}|{notes}|".format(
+                "|{date}|{symbol}|{name}|{market}|{market_cap}|{score_nh}|{score_off}|{yoy1}|{cagr}|{pretax}|{rev}|{notes}|".format(
                     date=row.report_date.isoformat(),
                     symbol=row.symbol,
                     name=row.name_jp or "—",
                     market=row.market or "—",
+                    market_cap=jpy(row.market_cap),
                     score_nh=entry.score_display,
                     score_off=entry.official_display,
                     yoy1=format_percentage(row.annual_last1_yoy),
@@ -233,7 +242,7 @@ def write_summary(
                 )
             )
     else:
-        lines.append("|—|—|—|—|—|—|—|—|—|—|該当なし|")
+        lines.append("|—|—|—|—|—|—|—|—|—|—|—|該当なし|")
     lines.append("")
     lines.append(
         "※ 数値は日次スクリーナーのCSV出力を再掲したもので、四捨五入しています。"

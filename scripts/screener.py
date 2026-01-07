@@ -283,6 +283,12 @@ def ratio(value: Optional[float], *, unit: str = "x") -> str:
     return f"{value:.1f}"
 
 
+def jpy(value: Optional[float]) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return f"{value / 1e8:.0f}億"
+
+
 def checkmark(value: Optional[bool]) -> str:
     if value is None:
         return "？"
@@ -358,6 +364,7 @@ def compose_markdown(
         "- `Symbol`: 東証ティッカー（例: 2726.T）。",
         "- `銘柄名`: Kabutanより取得した日本語正式名。",
         "- `市場`: 東証の市場区分（プライム/スタンダード/グロースなど）。",
+        "- `時価総額`: Yahoo!ファイナンスから取得した最新の時価総額。",
         "- `スコア（新高値）`: 新高値ブレイク投資術の年次・四半期チェック合計（スコア/最大7）。",
         "- `スコア（株の公式）`: 株の公式ルールの達成数（スコア/最大9）。適用項目が欠ける場合はメモ欄に理由を追記。",
         "- `PER`: Kabutanの現在PER（数値がない場合は空欄）。",
@@ -402,6 +409,7 @@ def compose_markdown(
             "Symbol",
             "銘柄名",
             "市場",
+            "時価総額",
             "スコア（新高値）",
             "スコア（株の公式）",
             "PER",
@@ -430,7 +438,7 @@ def compose_markdown(
             "利益率改善",
         ]
         alignment = [
-            ("---" if idx in (0, 1, 2, 10) else ("---:" if 3 <= idx <= 9 else ":---:"))
+            ("---" if idx in (0, 1, 2, 11) else ("---:" if 3 <= idx <= 10 else ":---:"))
             for idx, _ in enumerate(header_columns)
         ]
         summary_table_lines = [
@@ -439,9 +447,9 @@ def compose_markdown(
         ]
         group_row: List[str] = []
         for idx, _ in enumerate(header_columns):
-            if 11 <= idx <= 20:
+            if 12 <= idx <= 21:
                 group_row.append("株の公式")
-            elif idx >= 21:
+            elif idx >= 22:
                 group_row.append("新高値ブレイク")
             else:
                 group_row.append("")
@@ -457,6 +465,7 @@ def compose_markdown(
                 score_new_high_display = f"{score_value}/7"
             summary_table_lines.append(
                 f"|{record['symbol']}|{record.get('name_jp', '')}|{record.get('market', '')}|"
+                f"{jpy(record.get('market_cap'))}|"
                 f"{score_new_high_display}|"
                 f"{official_score_display}|"
                 f"{ratio(record.get('per'), unit='')}|"
