@@ -1,7 +1,7 @@
 name: weekly-highlights
 
 env:
-  ENABLE_WEEKLY_SUMMARY: "false"
+  ENABLE_WEEKLY_SUMMARY: "true"
 
 on:
   schedule:
@@ -17,6 +17,8 @@ jobs:
   summarize:
     if: ${{ env.ENABLE_WEEKLY_SUMMARY == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_run == 'true') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 

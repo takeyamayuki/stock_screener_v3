@@ -1,7 +1,7 @@
 name: daily-stock-screen
 
 env:
-  ENABLE_DAILY_SCREEN: "false"
+  ENABLE_DAILY_SCREEN: "true"
 
 on:
   schedule:
@@ -17,6 +17,8 @@ jobs:
   run:
     if: ${{ env.ENABLE_DAILY_SCREEN == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_run == 'true') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
