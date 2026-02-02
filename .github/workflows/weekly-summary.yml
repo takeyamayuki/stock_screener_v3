@@ -1,21 +1,12 @@
 name: weekly-highlights
 
-env:
-  ENABLE_WEEKLY_SUMMARY: "true"
-
 on:
   schedule:
     - cron: '30 15 * * FRI' # JST 00:30 on Saturday (UTC-9h)
   workflow_dispatch:
-    inputs:
-      force_run:
-        description: "Run even if disabled by repo variable"
-        required: false
-        default: "false"
 
 jobs:
   summarize:
-    if: ${{ env.ENABLE_WEEKLY_SUMMARY == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_run == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

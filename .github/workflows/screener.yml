@@ -1,21 +1,12 @@
 name: daily-stock-screen
 
-env:
-  ENABLE_DAILY_SCREEN: "true"
-
 on:
   schedule:
     - cron: '30 23 * * *'  # JST 08:30（GitHubはUTC）
   workflow_dispatch:
-    inputs:
-      force_run:
-        description: "Run even if disabled by repo variable"
-        required: false
-        default: "false"
 
 jobs:
   run:
-    if: ${{ env.ENABLE_DAILY_SCREEN == 'true' || (github.event_name == 'workflow_dispatch' && inputs.force_run == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
