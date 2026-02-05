@@ -1,0 +1,7 @@
+symbol,name_jp,market,score_0to7,official_score,official_applicable,official_rule1_new_high,official_rule3_growth,official_rule3_no_decline,official_rule4_recent20,official_rule5_sales,official_rule6_profit,official_rule7_resilience,official_rule8_per,official_rule9_small_cap,nh_stable_growth,nh_no_big_drop,nh_last1_20,nh_last2_20,annual_last1_yoy,annual_last2_cagr,q_last_pretax_yoy,q_last_revenue_yoy,q_last_ok_20_10,q_seq_ok,q_accelerating,q_improving_margin,notes,per,market_cap,digest,market_strength_ratio
+APEI,,,0,1,1,True,,,,,,,,,,,,,,,,,,,,,年次データ不足; 四半期データ不足; 公式スコア上限1/9: データ不足,,,,
+CHMG,,,0,1,1,True,,,,,,,,,,,,,,,,,,,,,年次データ不足; 四半期データ不足; 公式スコア上限1/9: データ不足,,,,
+MSDD,,,0,1,1,True,,,,,,,,,,,,,,,,,,,,,年次データ不足; 四半期データ不足; 公式スコア上限1/9: データ不足,,,,
+SKM,,,0,1,1,True,,,,,,,,,,,,,,,,,,,,,年次データ不足; 四半期データ不足; 公式スコア上限1/9: データ不足,,,,
+SMST,,,0,1,1,True,,,,,,,,,,,,,,,,,,,,,年次データ不足; 四半期データ不足; 公式スコア上限1/9: データ不足,,,,
+SPG,,,0,1,1,True,,,,,,,,,,,,,,,,,,,,,年次データ不足; 四半期データ不足; 公式スコア上限1/9: データ不足,,,,
